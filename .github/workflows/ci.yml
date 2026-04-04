@@ -1,0 +1,205 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full_extraction:
+        description: 'Run full 1.48 GB extraction test'
+        type: boolean
+        default: false
+
+jobs:
+
+  # ── Quick checks (every push, ~10 seconds) ──────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bash syntax check
+        run: bash -n extract-vc9.sh
+
+      - name: Shell lint (shellcheck)
+        run: shellcheck extract-vc9.sh || true  # advisory, don't block
+
+      - name: Verify repo files exist
+        run: |
+          test -f extract-vc9.sh
+          test -f install-vc9.ps1
+          test -f vc9-toolset.cmake
+          test -f CMakeLists.txt
+          test -f MSBuild/v90/Microsoft.Cpp.Win32.v90.props
+          test -f MSBuild/v90/Microsoft.Cpp.Win32.v90.targets
+          test -x extract-vc9.sh
+          echo "All repo files present and extract-vc9.sh is executable"
+
+  # ── CMake integration test (every push, ~15 seconds) ────────────────
+  cmake-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create mock extraction output
+        run: |
+          dest="$RUNNER_TEMP/vc9sp1"
+          mkdir -p "$dest/VC/bin/x86_amd64" \
+                   "$dest/VC/include" \
+                   "$dest/VC/lib/amd64" \
+                   "$dest/WinSDK/Include" \
+                   "$dest/WinSDK/Lib/x64" \
+                   "$dest/MSBuild/v90"
+          # Create key files (empty stubs for path validation)
+          touch "$dest/VC/bin/cl.exe" \
+                "$dest/VC/bin/link.exe" \
+                "$dest/VC/bin/x86_amd64/cl.exe" \
+                "$dest/VC/include/stdio.h" \
+                "$dest/VC/lib/msvcrt.lib" \
+                "$dest/VC/lib/amd64/msvcrt.lib" \
+                "$dest/WinSDK/Include/Windows.h" \
+                "$dest/WinSDK/Include/WinNT.h" \
+                "$dest/WinSDK/Lib/Kernel32.Lib" \
+                "$dest/WinSDK/Lib/User32.Lib" \
+                "$dest/WinSDK/Lib/x64/Kernel32.Lib"
+          cp MSBuild/v90/*.props MSBuild/v90/*.targets "$dest/MSBuild/v90/"
+          echo "Mock extraction output created at $dest"
+
+      - name: Test vc9_setup() via include()
+        run: |
+          cat > /tmp/test-include.cmake << 'EOF'
+          cmake_minimum_required(VERSION 3.19)
+          project(test_include NONE)
+          include("${VC9_TOOLSET_DIR}/vc9-toolset.cmake")
+          vc9_setup("${VC9_DEST}")
+          if(NOT VC9_ROOT)
+            message(FATAL_ERROR "VC9_ROOT not set")
+          endif()
+          foreach(f "${VC9_BIN_DIR}/cl.exe"
+                    "${WINSDK_INCLUDE_DIR}/Windows.h"
+                    "${WINSDK_LIB_DIR}/Kernel32.Lib")
+            if(NOT EXISTS "${f}")
+              message(FATAL_ERROR "Missing: ${f}")
+            endif()
+          endforeach()
+          message(STATUS "include() test PASSED")
+          EOF
+          cmake -P /tmp/test-include.cmake \
+            -DVC9_TOOLSET_DIR="$GITHUB_WORKSPACE" \
+            -DVC9_DEST="$RUNNER_TEMP/vc9sp1" || \
+          cmake -B /tmp/build-include \
+            -DVC9_TOOLSET_DIR="$GITHUB_WORKSPACE" \
+            -DVC9_DEST="$RUNNER_TEMP/vc9sp1" \
+            -S /tmp -DCMAKE_PROJECT_INCLUDE=/tmp/test-include.cmake
+
+      - name: Test vc9_setup() via FetchContent
+        run: |
+          mkdir -p /tmp/test-fetch
+          cat > /tmp/test-fetch/CMakeLists.txt << EOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_fetch NONE)
+          include(FetchContent)
+          FetchContent_Declare(vc9_toolset SOURCE_DIR "$GITHUB_WORKSPACE")
+          FetchContent_MakeAvailable(vc9_toolset)
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          if(NOT EXISTS "\${VC9_BIN_DIR}/cl.exe")
+            message(FATAL_ERROR "FetchContent test failed")
+          endif()
+          message(STATUS "FetchContent test PASSED")
+          EOF
+          cmake -B /tmp/test-fetch/build -S /tmp/test-fetch
+
+  # ── Full extraction test (manual/scheduled, ~10 min) ────────────────
+  extract:
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.full_extraction ||
+      github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install extraction tools
+        run: sudo apt-get update -qq && sudo apt-get install -y p7zip-full msitools
+
+      - name: Cache SDK 7.0 ISO
+        id: cache-iso
+        uses: actions/cache@v4
+        with:
+          path: GRMSDK_EN_DVD.iso
+          key: sdk70-iso-1552508928
+
+      - name: Download SDK 7.0 ISO
+        if: steps.cache-iso.outputs.cache-hit != 'true'
+        run: >-
+          wget -q --show-progress -O GRMSDK_EN_DVD.iso
+          "https://web.archive.org/web/20161230154527/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso"
+
+      - name: Run extract-vc9.sh
+        run: ./extract-vc9.sh "$RUNNER_TEMP/vc9sp1"
+
+      - name: Validate extraction output
+        run: |
+          dest="$RUNNER_TEMP/vc9sp1"
+          fail=0
+
+          echo "=== Key files ==="
+          for f in \
+            VC/bin/cl.exe VC/bin/link.exe VC/bin/ml.exe \
+            VC/bin/x86_amd64/cl.exe \
+            VC/include/stdio.h VC/include/iostream \
+            VC/lib/msvcrt.lib VC/lib/msvcprt.lib VC/lib/libcmt.lib \
+            VC/lib/amd64/msvcrt.lib \
+            WinSDK/Include/Windows.h WinSDK/Include/WinNT.h \
+            WinSDK/Include/dinput.h WinSDK/Include/dsound.h \
+            WinSDK/Include/d3d11.h \
+            WinSDK/Lib/Kernel32.Lib WinSDK/Lib/User32.Lib \
+            WinSDK/Lib/x64/Kernel32.Lib \
+            MSBuild/v90/Microsoft.Cpp.Win32.v90.props \
+            MSBuild/v90/Microsoft.Cpp.Win32.v90.targets; do
+            if [ -f "$dest/$f" ]; then
+              echo "  ✓ $f"
+            else
+              echo "  ✗ MISSING: $f"
+              fail=1
+            fi
+          done
+
+          echo ""
+          echo "=== Counts ==="
+          echo "  VC/bin:           $(find "$dest/VC/bin" -maxdepth 1 -type f | wc -l) files"
+          echo "  VC/bin/x86_amd64: $(find "$dest/VC/bin/x86_amd64" -type f 2>/dev/null | wc -l) files"
+          echo "  VC/include:       $(find "$dest/VC/include" -type f | wc -l) files"
+          echo "  VC/lib (x86):     $(find "$dest/VC/lib" -maxdepth 1 -type f | wc -l) files"
+          echo "  VC/lib/amd64:     $(find "$dest/VC/lib/amd64" -type f 2>/dev/null | wc -l) files"
+          echo "  WinSDK/Include:   $(find "$dest/WinSDK/Include" -type f | wc -l) files"
+          echo "  WinSDK/Lib (x86): $(find "$dest/WinSDK/Lib" -maxdepth 1 -type f | wc -l) files"
+          echo "  WinSDK/Lib/x64:   $(find "$dest/WinSDK/Lib/x64" -type f 2>/dev/null | wc -l) files"
+
+          echo ""
+          total=$(find "$dest" -type f | wc -l)
+          size=$(du -sh "$dest" | cut -f1)
+          echo "  Total: $total files, $size"
+
+          # Expect ~2900+ files
+          if [ "$total" -lt 2500 ]; then
+            echo "ERROR: Expected 2500+ files, got $total"
+            fail=1
+          fi
+
+          exit $fail
+
+      - name: Test CMake with real extraction
+        run: |
+          mkdir -p /tmp/cmake-real-test
+          cat > /tmp/cmake-real-test/CMakeLists.txt << EOF
+          cmake_minimum_required(VERSION 3.19)
+          project(real_test NONE)
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          if(NOT EXISTS "\${VC9_BIN_DIR}/cl.exe")
+            message(FATAL_ERROR "cl.exe not found via vc9_setup()")
+          endif()
+          message(STATUS "Real extraction CMake test PASSED")
+          EOF
+          cmake -B /tmp/cmake-real-test/build -S /tmp/cmake-real-test

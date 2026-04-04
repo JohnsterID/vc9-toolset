@@ -5,7 +5,7 @@
 .DESCRIPTION
     Downloads and installs:
     1. VC9 SP1 compiler from Windows SDK 7.0
-    2. MSBuild v90 toolset from VS2010 Express
+    2. MSBuild v90 toolset (bundled in this repository)
 
     After installation, set PlatformToolset=v90 in your project.
 
@@ -40,11 +40,10 @@ Write-Host ""
 
 # File names, URLs, and sizes
 $SDK70_NAME = "GRMSDK_EN_DVD.iso"
-$VS2010_NAME = "VS2010Express1.iso"
-$SDK70_URL = "https://archive.org/download/grmsdkx-en-dvd/GRMSDK_EN_DVD.iso"
-$VS2010_URL = "https://web.archive.org/web/20140424044344if_/http://download.microsoft.com/download/1/E/5/1E5F1C0A-0D5B-426A-A603-1798B951DDAE/VS2010Express1.iso"
-$SDK70_SIZE = 594841600   # ~567 MB
-$VS2010_SIZE = 727351296  # ~694 MB
+# NOTE: archive.org/grmsdkx-en-dvd is SDK 7.1 (VC10) — do NOT use that.
+# The correct SDK 7.0 ISO is ~1.48 GB (contains VC9 SP1 15.0.30729.1).
+$SDK70_URL = "https://web.archive.org/web/20161230154527/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso"
+$SDK70_SIZE = 1552508928  # ~1.48 GB
 
 function Get-OrDownload {
     param($FileName, $Url, $ExpectedSize)
@@ -173,28 +172,14 @@ Write-Host "  Created: ${commonTools}vsvars32.bat" -ForegroundColor Gray
 Write-Host "  VS90COMNTOOLS = $commonTools" -ForegroundColor Gray
 
 # ============================================
-# Step 2: Extract and install MSBuild v90 toolset from VS2010
+# Step 2: Install MSBuild v90 toolset (from repo)
 # ============================================
-Write-Host "[2/3] Installing MSBuild v90 toolset from VS2010 Express..." -ForegroundColor Green
+Write-Host "[2/3] Installing MSBuild v90 toolset..." -ForegroundColor Green
 
-$VS2010_Path = Get-OrDownload -FileName $VS2010_NAME -Url $VS2010_URL -ExpectedSize $VS2010_SIZE
-
-Write-Host "  Mounting VS2010 ISO..."
-$vs2010Drive = Mount-IsoAndGetPath $VS2010_Path
-
-try {
-    # Extract the self-extracting installer
-    $ixpvc = "$vs2010Drive\VCExpress\Ixpvc.exe"
-    $extractDir = "$TempDir\vs2010_extract"
-    
-    Write-Host "  Extracting vs_setup.cab..."
-    & 7z x $ixpvc "vs_setup.cab" -o"$extractDir" -y | Out-Null
-    
-    Write-Host "  Extracting v90 toolset files..."
-    & 7z x "$extractDir\vs_setup.cab" "FL_VC_Microsoft_Cpp_Win32_v90_props_ln" "FL_VC_Microsoft_Cpp_Win32_v90_Targets_ln" -o"$extractDir" -y | Out-Null
-    
-} finally {
-    Dismount-DiskImage -ImagePath $VS2010_Path | Out-Null
+$msbuildSrc = Join-Path $ScriptDir "MSBuild\v90"
+if (-not (Test-Path "$msbuildSrc\Microsoft.Cpp.Win32.v90.props")) {
+    Write-Error "MSBuild v90 files not found at $msbuildSrc. Repository may be incomplete."
+    exit 1
 }
 
 # Install to all MSBuild platform toolset locations
@@ -214,8 +199,8 @@ foreach ($dir in $toolsetDirs) {
     $parentDir = Split-Path $dir -Parent
     if (Test-Path $parentDir) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        Copy-Item "$extractDir\FL_VC_Microsoft_Cpp_Win32_v90_props_ln" "$dir\Microsoft.Cpp.Win32.v90.props" -Force
-        Copy-Item "$extractDir\FL_VC_Microsoft_Cpp_Win32_v90_Targets_ln" "$dir\Microsoft.Cpp.Win32.v90.targets" -Force
+        Copy-Item "$msbuildSrc\Microsoft.Cpp.Win32.v90.props" "$dir\Microsoft.Cpp.Win32.v90.props" -Force
+        Copy-Item "$msbuildSrc\Microsoft.Cpp.Win32.v90.targets" "$dir\Microsoft.Cpp.Win32.v90.targets" -Force
         Write-Host "  Installed to: $dir" -ForegroundColor Gray
     }
 }
@@ -249,7 +234,7 @@ Write-Host "  Or in .vcxproj: <PlatformToolset>v90</PlatformToolset>"
 Write-Host ""
 
 # Cleanup option
-$cleanup = Read-Host "Delete downloaded ISOs (~1.3GB)? [y/N]"
+$cleanup = Read-Host "Delete downloaded ISO (~1.5GB)? [y/N]"
 if ($cleanup -eq 'y' -or $cleanup -eq 'Y') {
     Remove-Item -Recurse -Force $TempDir
     Write-Host "Cleaned up temp files."
