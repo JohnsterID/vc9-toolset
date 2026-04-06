@@ -1,5 +1,8 @@
 # Downloaded ISOs
 *.iso
 
+# Extracted output
+vc9sp1/
+
 # Temp extraction
 temp/

@@ -1,0 +1,1135 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full_build:
+        description: 'Run full build tests (downloads SDK 7.0 + SP1 ISOs, ~2.3 GB)'
+        type: boolean
+        default: false
+
+jobs:
+
+  # ── Quick checks (every push, ~10 s) ──────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bash syntax check
+        run: bash -n extract-vc9.sh
+
+      - name: Shell lint (shellcheck)
+        run: shellcheck extract-vc9.sh || true  # advisory, don't block
+
+      - name: Verify repo files exist
+        run: |
+          test -f extract-vc9.sh
+          test -f install-vc9.ps1
+          test -f vc9-toolset.cmake
+          test -f CMakeLists.txt
+          test -f MSBuild/v90/Microsoft.Cpp.Win32.v90.props
+          test -f MSBuild/v90/Microsoft.Cpp.Win32.v90.targets
+          test -x extract-vc9.sh
+          echo "All repo files present and extract-vc9.sh is executable"
+
+  # ── CMake integration test (every push, ~15 s) ────────────────────
+  cmake-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create mock extraction output
+        run: |
+          dest="$RUNNER_TEMP/vc9sp1"
+          mkdir -p "$dest/VC/bin/x86_amd64" \
+                   "$dest/VC/include" \
+                   "$dest/VC/lib/amd64" \
+                   "$dest/WinSDK/Include" \
+                   "$dest/WinSDK/Lib/x64" \
+                   "$dest/MSBuild/v90"
+          touch "$dest/VC/bin/cl.exe" \
+                "$dest/VC/bin/link.exe" \
+                "$dest/VC/bin/x86_amd64/cl.exe" \
+                "$dest/VC/include/stdio.h" \
+                "$dest/VC/lib/msvcrt.lib" \
+                "$dest/VC/lib/amd64/msvcrt.lib" \
+                "$dest/WinSDK/Include/Windows.h" \
+                "$dest/WinSDK/Include/WinNT.h" \
+                "$dest/WinSDK/Lib/Kernel32.Lib" \
+                "$dest/WinSDK/Lib/User32.Lib" \
+                "$dest/WinSDK/Lib/x64/Kernel32.Lib"
+          cp MSBuild/v90/*.props MSBuild/v90/*.targets "$dest/MSBuild/v90/"
+          echo "Mock extraction output created at $dest"
+
+      - name: Test vc9_setup() via include()
+        run: |
+          mkdir -p /tmp/test-include
+          cat > /tmp/test-include/CMakeLists.txt << CMEOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_include NONE)
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          if(NOT VC9_ROOT)
+            message(FATAL_ERROR "VC9_ROOT not set")
+          endif()
+          foreach(f "\${VC9_BIN_DIR}/cl.exe"
+                    "\${WINSDK_INCLUDE_DIR}/Windows.h"
+                    "\${WINSDK_LIB_DIR}/Kernel32.Lib")
+            if(NOT EXISTS "\${f}")
+              message(FATAL_ERROR "Missing: \${f}")
+            endif()
+          endforeach()
+          if(NOT EXISTS "\${VC9_COMPAT_HEADER}")
+            message(FATAL_ERROR "VC9_COMPAT_HEADER not found: \${VC9_COMPAT_HEADER}")
+          endif()
+          if(NOT EXISTS "\${VC9_RUNTIME_STUBS_SRC}")
+            message(FATAL_ERROR "VC9_RUNTIME_STUBS_SRC not found: \${VC9_RUNTIME_STUBS_SRC}")
+          endif()
+          list(LENGTH VC9_CLANG_COMPILE_FLAGS _nflags)
+          if(_nflags LESS 5)
+            message(FATAL_ERROR "VC9_CLANG_COMPILE_FLAGS too short: \${_nflags}")
+          endif()
+          message(STATUS "include() test PASSED — \${_nflags} compile flags exported")
+          CMEOF
+          cmake -B /tmp/test-include/build -S /tmp/test-include
+
+      - name: Test vc9_setup() via FetchContent
+        run: |
+          mkdir -p /tmp/test-fetch
+          cat > /tmp/test-fetch/CMakeLists.txt << CMEOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_fetch NONE)
+          include(FetchContent)
+          FetchContent_Declare(vc9_toolset SOURCE_DIR "$GITHUB_WORKSPACE")
+          FetchContent_MakeAvailable(vc9_toolset)
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          if(NOT EXISTS "\${VC9_BIN_DIR}/cl.exe")
+            message(FATAL_ERROR "FetchContent test failed")
+          endif()
+          message(STATUS "FetchContent test PASSED")
+          CMEOF
+          cmake -B /tmp/test-fetch/build -S /tmp/test-fetch
+
+      - name: Test VC9_CRT variable (all 4 configs) and VC9_CLANG_LINK_LIBS
+        run: |
+          for crt in MD MDd MT MTd; do
+            mkdir -p "/tmp/test-crt-$crt"
+            cat > "/tmp/test-crt-$crt/CMakeLists.txt" << CMEOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_crt_$crt NONE)
+          set(VC9_CRT "$crt")
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+
+          # Verify VC9_CLANG_LINK_LIBS is set and contains kernel32.lib
+          if(NOT VC9_CLANG_LINK_LIBS)
+            message(FATAL_ERROR "VC9_CLANG_LINK_LIBS not set for VC9_CRT=$crt")
+          endif()
+          list(FIND VC9_CLANG_LINK_LIBS "kernel32.lib" _idx)
+          if(_idx EQUAL -1)
+            message(FATAL_ERROR "kernel32.lib missing from VC9_CLANG_LINK_LIBS")
+          endif()
+          message(STATUS "VC9_CRT=$crt => VC9_CLANG_LINK_LIBS=\${VC9_CLANG_LINK_LIBS}")
+          CMEOF
+            cmake -B "/tmp/test-crt-$crt/build" -S "/tmp/test-crt-$crt" 2>&1 | grep "VC9_CRT="
+          done
+          echo "All 4 VC9_CRT configs PASSED"
+
+      - name: Verify VC9_CRT link libs are correct per config
+        run: |
+          # MD should have msvcrt.lib, MT should have libcmt.lib, etc.
+          for pair in "MD:msvcrt.lib" "MDd:msvcrtd.lib" "MT:libcmt.lib" "MTd:libcmtd.lib"; do
+            crt="${pair%%:*}"
+            expected_lib="${pair##*:}"
+            mkdir -p "/tmp/test-libs-$crt"
+            cat > "/tmp/test-libs-$crt/CMakeLists.txt" << CMEOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_libs_$crt NONE)
+          set(VC9_CRT "$crt")
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          list(FIND VC9_CLANG_LINK_LIBS "$expected_lib" _idx)
+          if(_idx EQUAL -1)
+            message(FATAL_ERROR "VC9_CRT=$crt: expected $expected_lib in VC9_CLANG_LINK_LIBS=\${VC9_CLANG_LINK_LIBS}")
+          endif()
+          message(STATUS "VC9_CRT=$crt: $expected_lib found — OK")
+          CMEOF
+            cmake -B "/tmp/test-libs-$crt/build" -S "/tmp/test-libs-$crt" 2>&1 | grep "OK"
+          done
+          echo "All VC9_CRT link lib assertions PASSED"
+
+      - name: Verify VC9_CRT rejects invalid values
+        run: |
+          mkdir -p /tmp/test-crt-bad
+          cat > /tmp/test-crt-bad/CMakeLists.txt << CMEOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_crt_bad NONE)
+          set(VC9_CRT "INVALID")
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          CMEOF
+          if cmake -B /tmp/test-crt-bad/build -S /tmp/test-crt-bad 2>&1; then
+            echo "FAIL: should have rejected VC9_CRT=INVALID"
+            exit 1
+          fi
+          echo "Invalid VC9_CRT correctly rejected — PASSED"
+
+  # ── Full build tests (manual dispatch) ────────────────────────────
+  #
+  # Downloads SDK 7.0 (1.48 GB) + VS2008 SP1 (832 MB) ISOs once, then
+  # runs build jobs in parallel: native Windows cl.exe, MSBuild v90,
+  # Windows clang-cl, Linux clang cross-compile (x86 + x64), and SP1
+  # add-on verification (debug CRT on both Linux and Windows).
+
+  # Shared download — other jobs pull from the cache
+  download-isos:
+    if: github.event_name == 'workflow_dispatch' && inputs.full_build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cache SDK 7.0 ISO
+        id: cache-iso
+        uses: actions/cache@v4
+        with:
+          path: GRMSDK_EN_DVD.iso
+          key: sdk70-iso-1552508928
+          enableCrossOsArchive: true
+
+      - name: Download SDK 7.0 ISO
+        if: steps.cache-iso.outputs.cache-hit != 'true'
+        run: >-
+          wget -q --show-progress -O GRMSDK_EN_DVD.iso
+          "https://web.archive.org/web/20161230154527/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso"
+
+      - name: Verify ISO size
+        run: |
+          size=$(stat -c%s GRMSDK_EN_DVD.iso)
+          echo "ISO size: $size (expected 1552508928)"
+          [ "$size" = "1552508928" ] || { echo "SIZE MISMATCH"; exit 1; }
+
+      - name: Cache VS2008 SP1 ISO
+        id: cache-sp1
+        uses: actions/cache@v4
+        with:
+          path: VS2008SP1ENUX1512962.iso
+          key: vs2008sp1-iso-871700480
+          enableCrossOsArchive: true
+
+      - name: Download VS2008 SP1 ISO
+        if: steps.cache-sp1.outputs.cache-hit != 'true'
+        run: >-
+          wget -q --show-progress -O VS2008SP1ENUX1512962.iso
+          "https://download.microsoft.com/download/a/3/7/a371b6d1-fc5e-44f7-914c-cb452b4043a9/VS2008SP1ENUX1512962.iso"
+
+      - name: Verify SP1 ISO size
+        run: |
+          size=$(stat -c%s VS2008SP1ENUX1512962.iso)
+          echo "SP1 ISO size: $size (expected 871700480)"
+          [ "$size" = "871700480" ] || { echo "SP1 SIZE MISMATCH"; exit 1; }
+
+  # ── Linux: extract + cross-compile x86 (/MD + /MT) ────────────────
+  linux-cross-compile-x86:
+    needs: download-isos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y p7zip-full msitools clang lld
+
+      - name: Restore cached ISO
+        uses: actions/cache@v4
+        with:
+          path: GRMSDK_EN_DVD.iso
+          key: sdk70-iso-1552508928
+          enableCrossOsArchive: true
+
+      - name: Run extract-vc9.sh
+        run: ./extract-vc9.sh "$RUNNER_TEMP/vc9sp1"
+
+      - name: Validate extraction output
+        run: |
+          dest="$RUNNER_TEMP/vc9sp1"
+          fail=0
+
+          echo "=== Key files ==="
+          for f in \
+            VC/bin/cl.exe VC/bin/link.exe VC/bin/ml.exe \
+            VC/bin/x86_amd64/cl.exe \
+            VC/include/stdio.h VC/include/iostream \
+            VC/lib/msvcrt.lib VC/lib/msvcprt.lib VC/lib/libcmt.lib \
+            VC/lib/amd64/msvcrt.lib \
+            WinSDK/Include/Windows.h WinSDK/Include/WinNT.h \
+            WinSDK/Include/dinput.h WinSDK/Include/dsound.h \
+            WinSDK/Include/d3d11.h \
+            WinSDK/Lib/Kernel32.Lib WinSDK/Lib/User32.Lib \
+            WinSDK/Lib/x64/Kernel32.Lib \
+            MSBuild/v90/Microsoft.Cpp.Win32.v90.props \
+            MSBuild/v90/Microsoft.Cpp.Win32.v90.targets; do
+            if [ -f "$dest/$f" ]; then
+              echo "  ✓ $f"
+            else
+              echo "  ✗ MISSING: $f"
+              fail=1
+            fi
+          done
+
+          echo ""
+          echo "=== Counts ==="
+          echo "  VC/bin:           $(find "$dest/VC/bin" -maxdepth 1 -type f | wc -l) files"
+          echo "  VC/bin/x86_amd64: $(find "$dest/VC/bin/x86_amd64" -type f 2>/dev/null | wc -l) files"
+          echo "  VC/include:       $(find "$dest/VC/include" -type f | wc -l) files"
+          echo "  VC/lib (x86):     $(find "$dest/VC/lib" -maxdepth 1 -type f | wc -l) files"
+          echo "  VC/lib/amd64:     $(find "$dest/VC/lib/amd64" -type f 2>/dev/null | wc -l) files"
+          echo "  WinSDK/Include:   $(find "$dest/WinSDK/Include" -type f | wc -l) files"
+          echo "  WinSDK/Lib (x86): $(find "$dest/WinSDK/Lib" -maxdepth 1 -type f | wc -l) files"
+          echo "  WinSDK/Lib/x64:   $(find "$dest/WinSDK/Lib/x64" -type f 2>/dev/null | wc -l) files"
+
+          echo ""
+          total=$(find "$dest" -type f | wc -l)
+          size=$(du -sh "$dest" | cut -f1)
+          echo "  Total: $total files, $size"
+          [ "$total" -ge 2500 ] || { echo "ERROR: Expected 2500+ files, got $total"; fail=1; }
+          exit $fail
+
+      - name: Test CMake with real extraction
+        run: |
+          mkdir -p /tmp/cmake-real-test
+          cat > /tmp/cmake-real-test/CMakeLists.txt << EOF
+          cmake_minimum_required(VERSION 3.19)
+          project(real_test NONE)
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          if(NOT EXISTS "\${VC9_BIN_DIR}/cl.exe")
+            message(FATAL_ERROR "cl.exe not found via vc9_setup()")
+          endif()
+          message(STATUS "Real extraction CMake test PASSED")
+          EOF
+          cmake -B /tmp/cmake-real-test/build -S /tmp/cmake-real-test
+
+      - name: 'Clang cross-compile: smoke.c (C)'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          COMPAT="$GITHUB_WORKSPACE/compat"
+          clang --target=i686-pc-windows-msvc \
+            -fms-compatibility -fms-extensions \
+            -include "$COMPAT/vc9_compat.h" \
+            -U_MSC_VER -D_MSC_VER=1500 \
+            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -c test/smoke.c -o "$RUNNER_TEMP/smoke_c.obj"
+          echo "smoke.c compiled OK"
+
+      - name: 'Clang cross-compile: smoke.cpp (C++)'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          COMPAT="$GITHUB_WORKSPACE/compat"
+          clang++ --target=i686-pc-windows-msvc \
+            -fms-compatibility -fms-extensions -fdelayed-template-parsing \
+            -include "$COMPAT/vc9_compat.h" \
+            -U_MSC_VER -D_MSC_VER=1500 \
+            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -c test/smoke.cpp -o "$RUNNER_TEMP/smoke_cpp.obj"
+          echo "smoke.cpp compiled OK"
+
+      - name: 'Clang cross-compile: vc9_runtime_stubs.cpp'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          clang++ --target=i686-pc-windows-msvc \
+            -fms-compatibility -fms-extensions \
+            -isystem "$VC9/VC/include" \
+            -c compat/vc9_runtime_stubs.cpp -o "$RUNNER_TEMP/vc9_stubs.obj"
+          echo "vc9_runtime_stubs.cpp compiled OK"
+
+      - name: 'lld-link: smoke_c.exe'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          lld-link /OUT:"$RUNNER_TEMP/smoke_c.exe" \
+            /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
+            /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
+            "$RUNNER_TEMP/smoke_c.obj" msvcrt.lib kernel32.lib
+          file "$RUNNER_TEMP/smoke_c.exe"
+          file "$RUNNER_TEMP/smoke_c.exe" | grep -q "PE32 executable" \
+            || { echo "FAIL: not a PE32"; exit 1; }
+          echo "smoke_c.exe linked OK"
+
+      - name: 'lld-link: smoke_cpp.exe'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          lld-link /OUT:"$RUNNER_TEMP/smoke_cpp.exe" \
+            /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
+            /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
+            "$RUNNER_TEMP/smoke_cpp.obj" "$RUNNER_TEMP/vc9_stubs.obj" \
+            msvcrt.lib msvcprt.lib kernel32.lib
+          file "$RUNNER_TEMP/smoke_cpp.exe"
+          file "$RUNNER_TEMP/smoke_cpp.exe" | grep -q "PE32 executable" \
+            || { echo "FAIL: not a PE32"; exit 1; }
+          echo "smoke_cpp.exe linked OK"
+
+      - name: 'Verify PE imports (x86)'
+        run: |
+          echo "=== smoke_c.exe ==="
+          objdump -p "$RUNNER_TEMP/smoke_c.exe" | grep -i "DLL Name" || true
+          echo ""
+          echo "=== smoke_cpp.exe ==="
+          objdump -p "$RUNNER_TEMP/smoke_cpp.exe" | grep -i "DLL Name" || true
+          echo ""
+          # Verify VC9 runtime DLLs are imported (not VC14+ ucrt)
+          for exe in "$RUNNER_TEMP/smoke_c.exe" "$RUNNER_TEMP/smoke_cpp.exe"; do
+            name=$(basename "$exe")
+            if objdump -p "$exe" | grep -qi "MSVCR90.dll"; then
+              echo "OK: $name imports MSVCR90.dll"
+            else
+              echo "WARN: $name does NOT import MSVCR90.dll"
+            fi
+          done
+          if objdump -p "$RUNNER_TEMP/smoke_cpp.exe" | grep -qi "MSVCP90.dll"; then
+            echo "OK: smoke_cpp.exe imports MSVCP90.dll"
+          else
+            echo "WARN: smoke_cpp.exe does NOT import MSVCP90.dll"
+          fi
+
+      # ── /MT (static CRT) smoke test ──────────────────────────────────
+      - name: 'Clang cross-compile /MT: smoke.c (C, static CRT)'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          COMPAT="$GITHUB_WORKSPACE/compat"
+          clang --target=i686-pc-windows-msvc \
+            -fms-compatibility -fms-extensions \
+            -include "$COMPAT/vc9_compat.h" \
+            -U_MSC_VER -D_MSC_VER=1500 -DVC9_STATIC_CRT \
+            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -c test/smoke.c -o "$RUNNER_TEMP/smoke_c_mt.obj"
+          echo "smoke.c /MT compiled OK"
+
+      - name: 'Clang cross-compile /MT: smoke.cpp (C++, static CRT)'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          COMPAT="$GITHUB_WORKSPACE/compat"
+          clang++ --target=i686-pc-windows-msvc \
+            -fms-compatibility -fms-extensions -fdelayed-template-parsing \
+            -include "$COMPAT/vc9_compat.h" \
+            -U_MSC_VER -D_MSC_VER=1500 -DVC9_STATIC_CRT \
+            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -c test/smoke.cpp -o "$RUNNER_TEMP/smoke_cpp_mt.obj"
+          echo "smoke.cpp /MT compiled OK"
+
+      - name: 'lld-link /MT: smoke_c_mt.exe (static CRT)'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          lld-link /OUT:"$RUNNER_TEMP/smoke_c_mt.exe" \
+            /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
+            /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
+            "$RUNNER_TEMP/smoke_c_mt.obj" libcmt.lib kernel32.lib
+          file "$RUNNER_TEMP/smoke_c_mt.exe"
+          file "$RUNNER_TEMP/smoke_c_mt.exe" | grep -q "PE32 executable" \
+            || { echo "FAIL: not a PE32"; exit 1; }
+          echo "smoke_c_mt.exe linked OK"
+
+      - name: 'lld-link /MT: smoke_cpp_mt.exe (static CRT)'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          lld-link /OUT:"$RUNNER_TEMP/smoke_cpp_mt.exe" \
+            /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
+            /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
+            "$RUNNER_TEMP/smoke_cpp_mt.obj" "$RUNNER_TEMP/vc9_stubs.obj" \
+            libcmt.lib libcpmt.lib kernel32.lib
+          file "$RUNNER_TEMP/smoke_cpp_mt.exe"
+          file "$RUNNER_TEMP/smoke_cpp_mt.exe" | grep -q "PE32 executable" \
+            || { echo "FAIL: not a PE32"; exit 1; }
+          echo "smoke_cpp_mt.exe linked OK"
+
+      - name: 'Verify PE imports /MT (static CRT — no MSVCR90.dll)'
+        run: |
+          echo "=== smoke_c_mt.exe ==="
+          objdump -p "$RUNNER_TEMP/smoke_c_mt.exe" | grep -i "DLL Name" || echo "(no DLL imports)"
+          echo ""
+          echo "=== smoke_cpp_mt.exe ==="
+          objdump -p "$RUNNER_TEMP/smoke_cpp_mt.exe" | grep -i "DLL Name" || echo "(no DLL imports)"
+          echo ""
+          # Static CRT should NOT import MSVCR90.dll — only KERNEL32.dll
+          for exe in "$RUNNER_TEMP/smoke_c_mt.exe" "$RUNNER_TEMP/smoke_cpp_mt.exe"; do
+            name=$(basename "$exe")
+            if objdump -p "$exe" | grep -qi "MSVCR90.dll"; then
+              echo "FAIL: $name imports MSVCR90.dll (should be static)"
+              exit 1
+            fi
+            if objdump -p "$exe" | grep -qi "KERNEL32.dll"; then
+              echo "OK: $name imports KERNEL32.dll only (static CRT)"
+            fi
+          done
+
+      # ── Ninja + vc9_target_setup() integration ────────────────────────
+      - name: 'Ninja + vc9_target_setup: build + verify x86'
+        run: |
+          sudo apt-get install -y -qq ninja-build >/dev/null 2>&1
+          mkdir -p /tmp/ninja-x86
+          cat > /tmp/ninja-x86/CMakeLists.txt << EOF
+          cmake_minimum_required(VERSION 3.19)
+          project(ninja_smoke C CXX)
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          add_executable(smoke_c "$GITHUB_WORKSPACE/test/smoke.c")
+          vc9_target_setup(smoke_c)
+          add_executable(smoke_cpp "$GITHUB_WORKSPACE/test/smoke.cpp" "\${VC9_RUNTIME_STUBS_SRC}")
+          vc9_target_setup(smoke_cpp)
+          target_link_libraries(smoke_cpp PRIVATE msvcprt.lib)
+          EOF
+          cmake -G Ninja -B /tmp/ninja-x86/build -S /tmp/ninja-x86 \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/toolchain/vc9-cross-x86.cmake" \
+            -DVC9_ROOT="$RUNNER_TEMP/vc9sp1"
+          cmake --build /tmp/ninja-x86/build
+          file /tmp/ninja-x86/build/smoke_c.exe   | grep -q "PE32 executable" || { echo "FAIL: not PE32"; exit 1; }
+          file /tmp/ninja-x86/build/smoke_cpp.exe  | grep -q "PE32 executable" || { echo "FAIL: not PE32"; exit 1; }
+          objdump -p /tmp/ninja-x86/build/smoke_c.exe | grep -qi "MSVCR90.dll" \
+            || { echo "FAIL: smoke_c.exe missing MSVCR90.dll import"; exit 1; }
+          if objdump -p /tmp/ninja-x86/build/smoke_c.exe | grep -qi "MSVCR90D.dll"; then
+            echo "FAIL: smoke_c.exe has spurious MSVCR90D.dll import (debug CRT leak)"; exit 1
+          fi
+          echo "Ninja x86 build PASSED"
+
+  # ── Linux: SP1 add-ons (debug CRT) + /MDd + /MTd ─────────────────
+  linux-sp1-addons:
+    needs: download-isos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y p7zip-full msitools clang lld
+
+      - name: Restore cached SDK 7.0 ISO
+        uses: actions/cache@v4
+        with:
+          path: GRMSDK_EN_DVD.iso
+          key: sdk70-iso-1552508928
+          enableCrossOsArchive: true
+
+      - name: Restore cached SP1 ISO
+        uses: actions/cache@v4
+        with:
+          path: VS2008SP1ENUX1512962.iso
+          key: vs2008sp1-iso-871700480
+          enableCrossOsArchive: true
+
+      - name: 'extract-vc9.sh --include-debug-crt'
+        run: ./extract-vc9.sh --include-debug-crt "$RUNNER_TEMP/vc9sp1"
+
+      - name: Validate debug CRT files (10 files from SP1)
+        run: |
+          dest="$RUNNER_TEMP/vc9sp1"
+          fail=0
+          echo "=== Debug CRT libs (x86) ==="
+          for f in msvcrtd.lib msvcprtd.lib libcmtd.lib \
+                   msvcmrtd.lib msvcurtd.lib libcpmtd.lib; do
+            if [ -f "$dest/VC/lib/$f" ]; then
+              echo "  ✓ VC/lib/$f ($(stat -c%s "$dest/VC/lib/$f") bytes)"
+            else
+              echo "  ✗ MISSING: VC/lib/$f"; fail=1
+            fi
+          done
+          echo "=== Debug CRT DLLs ==="
+          for f in msvcr90d.dll msvcp90d.dll msvcm90d.dll; do
+            if [ -f "$dest/VC/redist/Debug_NonRedist/x86/Microsoft.VC90.DebugCRT/$f" ]; then
+              echo "  ✓ Microsoft.VC90.DebugCRT/$f"
+            else
+              echo "  ✗ MISSING: Microsoft.VC90.DebugCRT/$f"; fail=1
+            fi
+          done
+          echo "=== Debug CRT manifest ==="
+          if [ -f "$dest/VC/redist/Debug_NonRedist/x86/Microsoft.VC90.DebugCRT/Microsoft.VC90.DebugCRT.manifest" ]; then
+            echo "  ✓ Microsoft.VC90.DebugCRT.manifest"
+          else
+            echo "  ✗ MISSING: Microsoft.VC90.DebugCRT.manifest"; fail=1
+          fi
+          [ "$fail" -eq 0 ] || { echo "FAIL: missing debug CRT files"; exit 1; }
+          echo "All debug CRT files present — PASSED"
+
+      - name: 'Clang cross-compile /MDd: smoke.c (debug DLL CRT)'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          COMPAT="$GITHUB_WORKSPACE/compat"
+          clang --target=i386-pc-windows-msvc \
+            -fms-compatibility -fms-extensions \
+            -include "$COMPAT/vc9_compat.h" \
+            -U_MSC_VER -D_MSC_VER=1500 -D_DEBUG -DVC9_STATIC_CRT=0 \
+            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -c test/smoke.c -o "$RUNNER_TEMP/smoke_c_mdd.obj"
+          echo "smoke.c /MDd compiled OK"
+
+      - name: 'lld-link /MDd: smoke_c_mdd.exe (debug DLL CRT)'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          lld-link /OUT:"$RUNNER_TEMP/smoke_c_mdd.exe" \
+            /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
+            /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
+            "$RUNNER_TEMP/smoke_c_mdd.obj" msvcrtd.lib kernel32.lib
+          file "$RUNNER_TEMP/smoke_c_mdd.exe"
+          echo "smoke_c_mdd.exe linked OK"
+
+      - name: 'Verify PE imports /MDd (debug DLL CRT — MSVCR90D.dll)'
+        run: |
+          if objdump -p "$RUNNER_TEMP/smoke_c_mdd.exe" | grep -qi "MSVCR90D.dll"; then
+            echo "OK: smoke_c_mdd.exe imports MSVCR90D.dll"
+          else
+            echo "FAIL: smoke_c_mdd.exe should import MSVCR90D.dll"
+            objdump -p "$RUNNER_TEMP/smoke_c_mdd.exe" | grep -i "DLL Name" || true
+            exit 1
+          fi
+
+      - name: 'Clang cross-compile /MTd: smoke.c (debug static CRT)'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          COMPAT="$GITHUB_WORKSPACE/compat"
+          clang --target=i386-pc-windows-msvc \
+            -fms-compatibility -fms-extensions \
+            -include "$COMPAT/vc9_compat.h" \
+            -U_MSC_VER -D_MSC_VER=1500 -D_DEBUG -DVC9_STATIC_CRT \
+            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -c test/smoke.c -o "$RUNNER_TEMP/smoke_c_mtd.obj"
+          echo "smoke.c /MTd compiled OK"
+
+      - name: 'lld-link /MTd: smoke_c_mtd.exe (debug static CRT)'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          lld-link /OUT:"$RUNNER_TEMP/smoke_c_mtd.exe" \
+            /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
+            /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
+            "$RUNNER_TEMP/smoke_c_mtd.obj" libcmtd.lib kernel32.lib
+          file "$RUNNER_TEMP/smoke_c_mtd.exe"
+          echo "smoke_c_mtd.exe linked OK"
+
+      - name: 'Verify PE imports /MTd (debug static CRT — no MSVCR90D.dll)'
+        run: |
+          if objdump -p "$RUNNER_TEMP/smoke_c_mtd.exe" | grep -qi "MSVCR90D.dll"; then
+            echo "FAIL: smoke_c_mtd.exe imports MSVCR90D.dll (should be static)"
+            exit 1
+          fi
+          echo "OK: smoke_c_mtd.exe does NOT import MSVCR90D.dll (static debug CRT)"
+
+  # ── Windows: extract ISO with 7z (shared step logic) ───────────────
+  # Mount-DiskImage fails on Windows Server runners.
+  # Use 7z to extract MSIs from the ISO instead.
+
+  # ── Windows: install-vc9.ps1 + native v90 cl.exe compile + run ────
+  windows-native-cl:
+    needs: download-isos
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore cached ISO
+        uses: actions/cache@v4
+        with:
+          path: GRMSDK_EN_DVD.iso
+          key: sdk70-iso-1552508928
+          enableCrossOsArchive: true
+
+      - name: Run install-vc9.ps1
+        shell: pwsh
+        run: |
+          .\install-vc9.ps1 -IsoPath "$PWD\GRMSDK_EN_DVD.iso" -NoPrompt
+
+      - name: Verify install artifacts
+        shell: pwsh
+        run: |
+          $VCDir = "${env:ProgramFiles(x86)}\Microsoft Visual Studio 9.0\VC"
+          $checks = @(
+            @{ Path = "$VCDir\bin\cl.exe";        What = "cl.exe" }
+            @{ Path = "$VCDir\bin\mspdb80.dll";   What = "mspdb80.dll (copied from Common7\IDE)" }
+            @{ Path = "$VCDir\bin\mspdbcore.dll"; What = "mspdbcore.dll" }
+            @{ Path = "$VCDir\include\stdio.h";   What = "VC9 CRT headers" }
+            @{ Path = "$VCDir\lib\msvcrt.lib";    What = "VC9 CRT libs" }
+          )
+          $ok = $true
+          foreach ($c in $checks) {
+            if (Test-Path $c.Path) { Write-Host "  OK: $($c.What)" -ForegroundColor Green }
+            else { Write-Host "  MISSING: $($c.What) ($($c.Path))" -ForegroundColor Red; $ok = $false }
+          }
+
+          # Check registry
+          $regVC = Get-ItemProperty -Path "HKLM:\SOFTWARE\Wow6432Node\Microsoft\VisualStudio\9.0\Setup\VC" -ErrorAction SilentlyContinue
+          if ($regVC.ProductDir) { Write-Host "  OK: Registry VC ProductDir = $($regVC.ProductDir)" -ForegroundColor Green }
+          else { Write-Host "  MISSING: Registry VC ProductDir" -ForegroundColor Red; $ok = $false }
+
+          # Check VS90COMNTOOLS
+          $comntools = [Environment]::GetEnvironmentVariable("VS90COMNTOOLS", "Machine")
+          if ($comntools) { Write-Host "  OK: VS90COMNTOOLS = $comntools" -ForegroundColor Green }
+          else { Write-Host "  MISSING: VS90COMNTOOLS" -ForegroundColor Red; $ok = $false }
+
+          # Check v170 Toolset.props
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -property installationPath 2>$null
+          $toolsetProps = "$vsPath\MSBuild\Microsoft\VC\v170\Platforms\Win32\PlatformToolsets\v90\Toolset.props"
+          if (Test-Path $toolsetProps) { Write-Host "  OK: v170 Toolset.props" -ForegroundColor Green }
+          else { Write-Host "  MISSING: v170 Toolset.props ($toolsetProps)" -ForegroundColor Red; $ok = $false }
+
+          if (-not $ok) { Write-Error "install-vc9.ps1 did not install all expected files"; exit 1 }
+          Write-Host "All install artifacts verified." -ForegroundColor Cyan
+
+      - name: 'v90 cl.exe: compile + run smoke.c'
+        shell: cmd
+        run: |
+          set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
+          set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
+          set "PATH=%VCDir%\bin;%PATH%"
+          set "INCLUDE=%VCDir%\include;%SDKDir%Include"
+          set "LIB=%VCDir%\lib;%SDKDir%Lib"
+          "%VCDir%\bin\cl.exe" /W3 test\smoke.c /Fesmoke_c.exe /link kernel32.lib user32.lib
+          if errorlevel 1 exit /b 1
+          smoke_c.exe
+          if errorlevel 1 exit /b 1
+          echo --- smoke.c PASSED ---
+
+      - name: 'v90 cl.exe: compile + run smoke.cpp'
+        shell: cmd
+        run: |
+          set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
+          set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
+          set "PATH=%VCDir%\bin;%PATH%"
+          set "INCLUDE=%VCDir%\include;%SDKDir%Include"
+          set "LIB=%VCDir%\lib;%SDKDir%Lib"
+          "%VCDir%\bin\cl.exe" /W3 /EHsc test\smoke.cpp /Fesmoke_cpp.exe /link kernel32.lib user32.lib
+          if errorlevel 1 exit /b 1
+          smoke_cpp.exe
+          if errorlevel 1 exit /b 1
+          echo --- smoke.cpp PASSED ---
+
+      - name: 'Verify PE: dumpbin /dependents + /headers'
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          echo === smoke_c.exe dependents ===
+          dumpbin /dependents smoke_c.exe
+          echo.
+          echo === smoke_cpp.exe dependents ===
+          dumpbin /dependents smoke_cpp.exe
+          echo.
+          echo === smoke_c.exe PE header ===
+          dumpbin /headers smoke_c.exe | findstr /i "linker version machine"
+          echo.
+          echo === smoke_cpp.exe PE header ===
+          dumpbin /headers smoke_cpp.exe | findstr /i "linker version machine"
+          echo.
+          :: Native VC9 cl.exe defaults to /MT (static CRT) — no MSVCR90.dll dependency.
+          :: Verify VC9 linker version stamp (9.00) instead.
+          dumpbin /headers smoke_c.exe | findstr /i "9.00 linker version" >nul
+          if errorlevel 1 (
+            echo FAIL: smoke_c.exe does not have VC9 linker version 9.00
+            exit /b 1
+          )
+          echo OK: smoke_c.exe has linker version 9.00
+          dumpbin /headers smoke_cpp.exe | findstr /i "9.00 linker version" >nul
+          if errorlevel 1 (
+            echo FAIL: smoke_cpp.exe does not have VC9 linker version 9.00
+            exit /b 1
+          )
+          echo OK: smoke_cpp.exe has linker version 9.00
+          :: Verify no ucrt dependency (would indicate wrong runtime)
+          dumpbin /dependents smoke_c.exe | findstr /i "ucrtbase api-ms-win-crt" >nul
+          if not errorlevel 1 (
+            echo FAIL: smoke_c.exe depends on UCRT — wrong runtime!
+            exit /b 1
+          )
+          echo OK: no UCRT dependency detected
+          echo --- PE verification PASSED ---
+          exit /b 0
+
+  # ── Windows: install-vc9.ps1 with -IncludeDebugCRT ──────────────
+  windows-sp1-addons:
+    needs: download-isos
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore cached SDK 7.0 ISO
+        uses: actions/cache@v4
+        with:
+          path: GRMSDK_EN_DVD.iso
+          key: sdk70-iso-1552508928
+          enableCrossOsArchive: true
+
+      - name: Restore cached SP1 ISO
+        uses: actions/cache@v4
+        with:
+          path: VS2008SP1ENUX1512962.iso
+          key: vs2008sp1-iso-871700480
+          enableCrossOsArchive: true
+
+      - name: 'install-vc9.ps1 -IncludeDebugCRT'
+        shell: pwsh
+        run: |
+          .\install-vc9.ps1 -IsoPath "$PWD\GRMSDK_EN_DVD.iso" `
+                            -SP1IsoPath "$PWD\VS2008SP1ENUX1512962.iso" `
+                            -IncludeDebugCRT -NoPrompt
+
+      - name: Verify debug CRT files installed
+        shell: pwsh
+        run: |
+          $VCDir = "${env:ProgramFiles(x86)}\Microsoft Visual Studio 9.0\VC"
+          $ok = $true
+
+          Write-Host "=== Debug CRT libs ==="
+          foreach ($f in @("msvcrtd.lib","msvcprtd.lib","libcmtd.lib",
+                           "msvcmrtd.lib","msvcurtd.lib","libcpmtd.lib")) {
+            $p = "$VCDir\lib\$f"
+            if (Test-Path $p) { Write-Host "  OK: $f ($((Get-Item $p).Length) bytes)" }
+            else { Write-Host "  MISSING: $f" -ForegroundColor Red; $ok = $false }
+          }
+
+          Write-Host "=== Debug CRT DLLs ==="
+          foreach ($f in @("msvcr90d.dll","msvcp90d.dll","msvcm90d.dll")) {
+            $p = "$VCDir\redist\Debug_NonRedist\x86\Microsoft.VC90.DebugCRT\$f"
+            if (Test-Path $p) { Write-Host "  OK: $f" }
+            else { Write-Host "  MISSING: $f" -ForegroundColor Red; $ok = $false }
+          }
+
+          if (-not $ok) { throw "Missing debug CRT files" }
+          Write-Host "All debug CRT files present — PASSED" -ForegroundColor Cyan
+
+      - name: 'v90 cl.exe /MDd: compile + run smoke.c (debug DLL CRT)'
+        shell: cmd
+        run: |
+          set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
+          set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
+          set "PATH=%VCDir%\bin;%PATH%"
+          set "INCLUDE=%VCDir%\include;%SDKDir%Include"
+          set "LIB=%VCDir%\lib;%SDKDir%Lib"
+          "%VCDir%\bin\cl.exe" /W3 /MDd test\smoke.c /Fesmoke_mdd.exe /link kernel32.lib user32.lib
+          if errorlevel 1 exit /b 1
+          smoke_mdd.exe
+          if errorlevel 1 exit /b 1
+          echo --- smoke.c /MDd PASSED ---
+
+      - name: 'Verify PE: /MDd links to MSVCR90D.dll'
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          dumpbin /dependents smoke_mdd.exe | findstr /i "MSVCR90D" >nul
+          if errorlevel 1 (
+            echo FAIL: smoke_mdd.exe does not depend on MSVCR90D.dll
+            dumpbin /dependents smoke_mdd.exe
+            exit /b 1
+          )
+          echo OK: smoke_mdd.exe depends on MSVCR90D.dll
+          echo --- PE verification /MDd PASSED ---
+
+  # ── Windows: MSBuild /p:PlatformToolset=v90 ──────────────────────
+  windows-msbuild:
+    needs: download-isos
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore cached ISO
+        uses: actions/cache@v4
+        with:
+          path: GRMSDK_EN_DVD.iso
+          key: sdk70-iso-1552508928
+          enableCrossOsArchive: true
+
+      - name: Run install-vc9.ps1
+        shell: pwsh
+        run: |
+          .\install-vc9.ps1 -IsoPath "$PWD\GRMSDK_EN_DVD.iso" -NoPrompt
+
+      - name: Verify generated Toolset files
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -property installationPath
+          $toolsetDir = "$vsPath\MSBuild\Microsoft\VC\v170\Platforms\Win32\PlatformToolsets\v90"
+          Write-Host "=== Toolset.props ===" -ForegroundColor Cyan
+          Get-Content "$toolsetDir\Toolset.props"
+          Write-Host "`n=== Toolset.targets ===" -ForegroundColor Cyan
+          Get-Content "$toolsetDir\Toolset.targets"
+
+      - name: 'MSBuild: build smoke.vcxproj /p:PlatformToolset=v90'
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
+          set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
+          set "INCLUDE=%VCDir%\include;%SDKDir%Include"
+          set "LIB=%VCDir%\lib;%SDKDir%Lib"
+          set "PATH=%VCDir%\bin;%PATH%"
+
+          :: UseEnv=true: use INCLUDE/LIB/PATH from environment
+          :: TrackFileAccess=false: VC9 cl.exe doesn't use v170's file tracker
+          msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 /p:UseEnv=true /p:TrackFileAccess=false /v:normal
+          if errorlevel 1 exit /b 1
+          echo --- MSBuild v90 build PASSED ---
+
+      - name: Run MSBuild output
+        shell: cmd
+        run: |
+          for /f "tokens=*" %%f in ('dir /s /b test\*.exe 2^>nul') do (
+            echo Running: %%f
+            "%%f"
+            echo --- smoke.exe returned %errorlevel% ---
+            exit /b 0
+          )
+          echo smoke.exe not found anywhere:
+          dir /s /b test\* 2>nul
+          exit /b 1
+
+      - name: 'Verify PE: dumpbin /dependents + /headers (MSBuild output)'
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "tokens=*" %%f in ('dir /s /b test\*.exe 2^>nul') do (
+            echo === %%f dependents ===
+            dumpbin /dependents "%%f"
+            echo.
+            echo === %%f PE header ===
+            dumpbin /headers "%%f" | findstr /i "linker version machine"
+            echo.
+            :: Verify VC9 linker version stamp (9.00)
+            dumpbin /headers "%%f" | findstr /i "9.00 linker version" >nul
+            if errorlevel 1 (
+              echo FAIL: %%f does not have VC9 linker version 9.00
+              exit /b 1
+            )
+            echo OK: %%f has linker version 9.00
+            exit /b 0
+          )
+
+  # ── Windows: clang-cl + VC9 headers/libs ──────────────────────────
+  windows-clang-cl:
+    needs: download-isos
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore cached ISO
+        uses: actions/cache@v4
+        with:
+          path: GRMSDK_EN_DVD.iso
+          key: sdk70-iso-1552508928
+          enableCrossOsArchive: true
+
+      - name: Run install-vc9.ps1
+        shell: pwsh
+        run: |
+          .\install-vc9.ps1 -IsoPath "$PWD\GRMSDK_EN_DVD.iso" -NoPrompt
+
+      - name: 'clang-cl: compile smoke.c'
+        shell: cmd
+        run: |
+          set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
+          set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
+          clang-cl /nologo -m32 -fms-compatibility-version=15.00 -imsvc "%VCDir%\include" -imsvc "%SDKDir%Include" -D_MSC_VER=1500 /FI "compat\vc9_compat.h" /c test\smoke.c /Fo:smoke_c.obj
+          if errorlevel 1 exit /b 1
+          echo --- smoke.c compiled ---
+
+      - name: 'clang-cl: link + run smoke_c.exe'
+        shell: cmd
+        run: |
+          set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
+          set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
+          lld-link /OUT:smoke_c_clang.exe /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup /LIBPATH:"%VCDir%\lib" /LIBPATH:"%SDKDir%Lib" smoke_c.obj msvcrt.lib kernel32.lib user32.lib /NODEFAULTLIB:libcmt.lib
+          if errorlevel 1 exit /b 1
+          echo --- Running smoke_c_clang.exe ---
+          smoke_c_clang.exe
+          if errorlevel 1 exit /b 1
+          echo --- clang-cl smoke.c PASSED ---
+
+      - name: 'clang-cl: compile stubs + smoke.cpp'
+        shell: cmd
+        run: |
+          set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
+          set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
+          clang-cl /nologo -m32 -fms-compatibility-version=15.00 -imsvc "%VCDir%\include" /c compat\vc9_runtime_stubs.cpp /Fo:vc9_stubs.obj
+          if errorlevel 1 exit /b 1
+          echo --- stubs compiled ---
+          clang-cl /nologo -m32 -fms-compatibility-version=15.00 -imsvc "%VCDir%\include" -imsvc "%SDKDir%Include" -D_MSC_VER=1500 /FI "compat\vc9_compat.h" /EHsc /c test\smoke.cpp /Fo:smoke_cpp.obj
+          if errorlevel 1 exit /b 1
+          echo --- smoke.cpp compiled ---
+
+      - name: 'clang-cl: link + run smoke_cpp.exe'
+        shell: cmd
+        run: |
+          set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
+          set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
+          lld-link /OUT:smoke_cpp_clang.exe /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup /LIBPATH:"%VCDir%\lib" /LIBPATH:"%SDKDir%Lib" smoke_cpp.obj vc9_stubs.obj msvcrt.lib msvcprt.lib kernel32.lib user32.lib /NODEFAULTLIB:libcmt.lib
+          if errorlevel 1 exit /b 1
+          echo --- Running smoke_cpp_clang.exe ---
+          smoke_cpp_clang.exe
+          if errorlevel 1 exit /b 1
+          echo --- clang-cl smoke.cpp PASSED ---
+
+      - name: 'Verify PE: dumpbin /dependents + /headers (clang-cl)'
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          echo === smoke_c_clang.exe ===
+          dumpbin /dependents smoke_c_clang.exe
+          dumpbin /headers smoke_c_clang.exe | findstr /i "linker version machine"
+          echo.
+          echo === smoke_cpp_clang.exe ===
+          dumpbin /dependents smoke_cpp_clang.exe
+          dumpbin /headers smoke_cpp_clang.exe | findstr /i "linker version machine"
+          echo.
+          dumpbin /dependents smoke_c_clang.exe | findstr /i "MSVCR90" >nul
+          if errorlevel 1 (
+            echo FAIL: smoke_c_clang.exe does not depend on MSVCR90.dll
+            exit /b 1
+          )
+          echo OK: smoke_c_clang.exe depends on MSVCR90.dll
+          dumpbin /dependents smoke_cpp_clang.exe | findstr /i "MSVCP90" >nul
+          if errorlevel 1 (
+            echo FAIL: smoke_cpp_clang.exe does not depend on MSVCP90.dll
+            exit /b 1
+          )
+          echo OK: smoke_cpp_clang.exe depends on MSVCP90.dll
+          echo --- PE verification PASSED ---
+
+  # ── Linux: clang cross-compile x64 (amd64 libs) ──────────────────
+  linux-cross-compile-x64:
+    needs: download-isos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y p7zip-full msitools clang lld
+
+      - name: Restore cached ISO
+        uses: actions/cache@v4
+        with:
+          path: GRMSDK_EN_DVD.iso
+          key: sdk70-iso-1552508928
+          enableCrossOsArchive: true
+
+      - name: Run extract-vc9.sh
+        run: ./extract-vc9.sh "$RUNNER_TEMP/vc9sp1"
+
+      - name: Verify amd64 libs exist
+        run: |
+          dest="$RUNNER_TEMP/vc9sp1"
+          for f in VC/lib/amd64/msvcrt.lib VC/lib/amd64/msvcprt.lib \
+                   VC/lib/amd64/libcmt.lib VC/bin/x86_amd64/cl.exe \
+                   WinSDK/Lib/x64/Kernel32.Lib; do
+            if [ -f "$dest/$f" ]; then
+              echo "  OK $f"
+            else
+              echo "  MISSING $f"; exit 1
+            fi
+          done
+
+      - name: 'Clang cross-compile x64: smoke.c'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          COMPAT="$GITHUB_WORKSPACE/compat"
+          clang --target=x86_64-pc-windows-msvc \
+            -fms-compatibility -fms-extensions \
+            -include "$COMPAT/vc9_compat.h" \
+            -U_MSC_VER -D_MSC_VER=1500 \
+            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -c test/smoke.c -o "$RUNNER_TEMP/smoke_c_x64.obj"
+          echo "smoke.c x64 compiled OK"
+
+      - name: 'Clang cross-compile x64: smoke.cpp'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          COMPAT="$GITHUB_WORKSPACE/compat"
+          clang++ --target=x86_64-pc-windows-msvc \
+            -fms-compatibility -fms-extensions -fdelayed-template-parsing \
+            -include "$COMPAT/vc9_compat.h" \
+            -U_MSC_VER -D_MSC_VER=1500 \
+            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -c test/smoke.cpp -o "$RUNNER_TEMP/smoke_cpp_x64.obj"
+          echo "smoke.cpp x64 compiled OK"
+
+      - name: 'Clang cross-compile x64: vc9_runtime_stubs.cpp'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          clang++ --target=x86_64-pc-windows-msvc \
+            -fms-compatibility -fms-extensions \
+            -isystem "$VC9/VC/include" \
+            -c compat/vc9_runtime_stubs.cpp -o "$RUNNER_TEMP/vc9_stubs_x64.obj"
+          echo "vc9_runtime_stubs.cpp x64 compiled OK"
+
+      - name: 'lld-link x64: smoke_c.exe'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          lld-link /OUT:"$RUNNER_TEMP/smoke_c_x64.exe" \
+            /MACHINE:x64 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
+            /LIBPATH:"$VC9/VC/lib/amd64" /LIBPATH:"$VC9/WinSDK/Lib/x64" \
+            "$RUNNER_TEMP/smoke_c_x64.obj" msvcrt.lib kernel32.lib
+          file "$RUNNER_TEMP/smoke_c_x64.exe"
+          file "$RUNNER_TEMP/smoke_c_x64.exe" | grep -q "PE32+" \
+            || { echo "FAIL: not a PE32+ (x64)"; exit 1; }
+          echo "smoke_c x64 linked OK"
+
+      - name: 'lld-link x64: smoke_cpp.exe'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          lld-link /OUT:"$RUNNER_TEMP/smoke_cpp_x64.exe" \
+            /MACHINE:x64 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
+            /LIBPATH:"$VC9/VC/lib/amd64" /LIBPATH:"$VC9/WinSDK/Lib/x64" \
+            "$RUNNER_TEMP/smoke_cpp_x64.obj" "$RUNNER_TEMP/vc9_stubs_x64.obj" \
+            msvcrt.lib msvcprt.lib kernel32.lib
+          file "$RUNNER_TEMP/smoke_cpp_x64.exe"
+          file "$RUNNER_TEMP/smoke_cpp_x64.exe" | grep -q "PE32+" \
+            || { echo "FAIL: not a PE32+ (x64)"; exit 1; }
+          echo "smoke_cpp x64 linked OK"
+
+      - name: 'Verify PE imports (x64)'
+        run: |
+          echo "=== smoke_c_x64.exe ==="
+          objdump -p "$RUNNER_TEMP/smoke_c_x64.exe" | grep -i "DLL Name" || true
+          echo ""
+          echo "=== smoke_cpp_x64.exe ==="
+          objdump -p "$RUNNER_TEMP/smoke_cpp_x64.exe" | grep -i "DLL Name" || true
+          echo ""
+          for exe in "$RUNNER_TEMP/smoke_c_x64.exe" "$RUNNER_TEMP/smoke_cpp_x64.exe"; do
+            name=$(basename "$exe")
+            if objdump -p "$exe" | grep -qi "MSVCR90.dll"; then
+              echo "OK: $name imports MSVCR90.dll"
+            else
+              echo "WARN: $name does NOT import MSVCR90.dll"
+            fi
+          done
+          if objdump -p "$RUNNER_TEMP/smoke_cpp_x64.exe" | grep -qi "MSVCP90.dll"; then
+            echo "OK: smoke_cpp_x64.exe imports MSVCP90.dll"
+          else
+            echo "WARN: smoke_cpp_x64.exe does NOT import MSVCP90.dll"
+          fi
+
+      # ── Ninja + vc9_target_setup() integration (x64) ──────────────────
+      - name: 'Ninja + vc9_target_setup: build + verify x64'
+        run: |
+          sudo apt-get install -y -qq ninja-build >/dev/null 2>&1
+          mkdir -p /tmp/ninja-x64
+          cat > /tmp/ninja-x64/CMakeLists.txt << EOF
+          cmake_minimum_required(VERSION 3.19)
+          project(ninja_smoke_x64 C CXX)
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          add_executable(smoke_c "$GITHUB_WORKSPACE/test/smoke.c")
+          vc9_target_setup(smoke_c)
+          add_executable(smoke_cpp "$GITHUB_WORKSPACE/test/smoke.cpp" "\${VC9_RUNTIME_STUBS_SRC}")
+          vc9_target_setup(smoke_cpp)
+          target_link_libraries(smoke_cpp PRIVATE msvcprt.lib)
+          EOF
+          cmake -G Ninja -B /tmp/ninja-x64/build -S /tmp/ninja-x64 \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/toolchain/vc9-cross-x64.cmake" \
+            -DVC9_ROOT="$RUNNER_TEMP/vc9sp1"
+          cmake --build /tmp/ninja-x64/build
+          file /tmp/ninja-x64/build/smoke_c.exe   | grep -q "PE32+" || { echo "FAIL: not PE32+"; exit 1; }
+          file /tmp/ninja-x64/build/smoke_cpp.exe  | grep -q "PE32+" || { echo "FAIL: not PE32+"; exit 1; }
+          objdump -p /tmp/ninja-x64/build/smoke_c.exe | grep -qi "MSVCR90.dll" \
+            || { echo "FAIL: smoke_c.exe missing MSVCR90.dll import"; exit 1; }
+          if objdump -p /tmp/ninja-x64/build/smoke_c.exe | grep -qi "MSVCR90D.dll"; then
+            echo "FAIL: smoke_c.exe has spurious MSVCR90D.dll import (debug CRT leak)"; exit 1
+          fi
+          echo "Ninja x64 build PASSED"
