@@ -176,6 +176,20 @@ function(vc9_target_setup target)
         message(FATAL_ERROR "vc9_target_setup: call vc9_setup() first")
     endif()
 
+    # Guard: VC9 headers/libs are Windows-only — using them in a native Linux
+    # build (without cross-compilation) will fail with errors like
+    # "#error Only Win32 target supported!" from VC9's yvals.h / crtdefs.h.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR (UNIX AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows"))
+        if(NOT CMAKE_CROSSCOMPILING)
+            message(FATAL_ERROR
+                "vc9_target_setup: VC9 headers require cross-compilation to Windows.\n"
+                "Use a toolchain file (e.g. toolchain/vc9-cross-x86.cmake) or set:\n"
+                "  cmake -DCMAKE_SYSTEM_NAME=Windows \\\n"
+                "        -DCMAKE_C_COMPILER_TARGET=i686-pc-windows-msvc ...\n"
+                "See README.md § 'Clang Cross-Compilation from Linux' for details.")
+        endif()
+    endif()
+
     target_include_directories(${target} SYSTEM PRIVATE ${VC9_INCLUDE_DIRS})
 
     target_compile_options(${target} PRIVATE

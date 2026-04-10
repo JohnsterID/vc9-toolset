@@ -36,6 +36,20 @@ jobs:
           test -x extract-vc9.sh
           echo "All repo files present and extract-vc9.sh is executable"
 
+  # ── CMake function unit tests (every push, ~5 s) ──────────────────
+  cmake-unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run CMake function unit tests (mock extraction, no downloads)
+        run: |
+          cmake -B /tmp/cmake-func-test -S test/cmake-functions 2>&1 | tee /tmp/cmake-test.log
+          grep -q "0 failed" /tmp/cmake-test.log || { echo "FAIL: some tests failed"; exit 1; }
+
+      - name: Run shell script tests
+        run: bash test/test-extract-prereqs.sh
+
   # ── CMake integration test (every push, ~15 s) ────────────────────
   cmake-test:
     runs-on: ubuntu-latest
