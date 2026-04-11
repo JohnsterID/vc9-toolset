@@ -176,6 +176,20 @@ function(vc9_target_setup target)
         message(FATAL_ERROR "vc9_target_setup: call vc9_setup() first")
     endif()
 
+    # VC9 headers/libs target Windows.  Without a cross-compilation toolchain
+    # file, GCC rejects --target= and -fms-compatibility, while native clang
+    # compiles objects but the Linux linker can't consume .lib files.  Catch
+    # both cases early with an actionable message.
+    if(NOT CMAKE_CROSSCOMPILING AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        message(FATAL_ERROR
+            "vc9_target_setup: VC9 headers require cross-compilation to Windows.\n"
+            "Use a toolchain file, e.g.:\n"
+            "  cmake -G Ninja -B build \\\n"
+            "    -DCMAKE_TOOLCHAIN_FILE=toolchain/vc9-cross-x86.cmake \\\n"
+            "    -DVC9_ROOT=/path/to/vc9sp1\n"
+            "See README.md § 'Clang Cross-Compilation from Linux'.")
+    endif()
+
     target_include_directories(${target} SYSTEM PRIVATE ${VC9_INCLUDE_DIRS})
 
     target_compile_options(${target} PRIVATE
