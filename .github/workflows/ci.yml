@@ -178,6 +178,100 @@ jobs:
           fi
           echo "Invalid VC9_CRT correctly rejected — PASSED"
 
+      - name: Test VC9_ARCH default (x86) and VC9_TARGET_TRIPLE
+        run: |
+          mkdir -p /tmp/test-arch-default
+          cat > /tmp/test-arch-default/CMakeLists.txt << CMEOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_arch_default NONE)
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          if(NOT VC9_TARGET_TRIPLE STREQUAL "i686-pc-windows-msvc")
+            message(FATAL_ERROR "Default arch should be i686, got: \${VC9_TARGET_TRIPLE}")
+          endif()
+          message(STATUS "Default arch => \${VC9_TARGET_TRIPLE} — OK")
+          CMEOF
+          cmake -B /tmp/test-arch-default/build -S /tmp/test-arch-default 2>&1 | grep "OK"
+          echo "VC9_ARCH default (x86) PASSED"
+
+      - name: Test VC9_ARCH=x64 selects amd64 lib paths
+        run: |
+          mkdir -p /tmp/test-arch-x64
+          cat > /tmp/test-arch-x64/CMakeLists.txt << CMEOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_arch_x64 NONE)
+          set(VC9_ARCH "x64")
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          if(NOT VC9_TARGET_TRIPLE STREQUAL "x86_64-pc-windows-msvc")
+            message(FATAL_ERROR "x64 should be x86_64, got: \${VC9_TARGET_TRIPLE}")
+          endif()
+          list(FIND VC9_LIB_DIRS "$RUNNER_TEMP/vc9sp1/VC/lib/amd64" _idx)
+          if(_idx EQUAL -1)
+            message(FATAL_ERROR "x64 VC9_LIB_DIRS missing amd64: \${VC9_LIB_DIRS}")
+          endif()
+          list(FIND VC9_LIB_DIRS "$RUNNER_TEMP/vc9sp1/WinSDK/Lib/x64" _idx)
+          if(_idx EQUAL -1)
+            message(FATAL_ERROR "x64 VC9_LIB_DIRS missing WinSDK/Lib/x64: \${VC9_LIB_DIRS}")
+          endif()
+          message(STATUS "x64 arch => \${VC9_TARGET_TRIPLE}, libs OK")
+          CMEOF
+          cmake -B /tmp/test-arch-x64/build -S /tmp/test-arch-x64 2>&1 | grep "OK"
+          echo "VC9_ARCH=x64 PASSED"
+
+      - name: Test VC9_ARCH rejects invalid values
+        run: |
+          mkdir -p /tmp/test-arch-bad
+          cat > /tmp/test-arch-bad/CMakeLists.txt << CMEOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_arch_bad NONE)
+          set(VC9_ARCH "arm64")
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          CMEOF
+          if cmake -B /tmp/test-arch-bad/build -S /tmp/test-arch-bad 2>&1; then
+            echo "FAIL: should have rejected VC9_ARCH=arm64"
+            exit 1
+          fi
+          echo "Invalid VC9_ARCH correctly rejected — PASSED"
+
+      - name: Verify VC9_CLANG_COMPILE_FLAGS content
+        run: |
+          mkdir -p /tmp/test-flags
+          cat > /tmp/test-flags/CMakeLists.txt << CMEOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_flags NONE)
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          string(FIND "\${VC9_CLANG_COMPILE_FLAGS}" "-fms-compatibility" _p1)
+          string(FIND "\${VC9_CLANG_COMPILE_FLAGS}" "_MSC_VER=1500" _p2)
+          string(FIND "\${VC9_CLANG_COMPILE_FLAGS}" "--target=" _p3)
+          string(FIND "\${VC9_CLANG_COMPILE_FLAGS}" "-fdelayed-template-parsing" _p4)
+          if(_p1 EQUAL -1 OR _p2 EQUAL -1 OR _p3 EQUAL -1 OR _p4 EQUAL -1)
+            message(FATAL_ERROR "Missing flag: ms-compat=\${_p1} msc-ver=\${_p2} target=\${_p3} delayed=\${_p4}")
+          endif()
+          message(STATUS "VC9_CLANG_COMPILE_FLAGS content — OK")
+          CMEOF
+          cmake -B /tmp/test-flags/build -S /tmp/test-flags 2>&1 | grep "OK"
+          echo "VC9_CLANG_COMPILE_FLAGS content PASSED"
+
+      - name: Verify vc9_target_setup rejects native Linux builds
+        run: |
+          mkdir -p /tmp/test-guard
+          cat > /tmp/test-guard/CMakeLists.txt << CMEOF
+          cmake_minimum_required(VERSION 3.19)
+          project(test_guard C)
+          include("$GITHUB_WORKSPACE/vc9-toolset.cmake")
+          vc9_setup("$RUNNER_TEMP/vc9sp1")
+          add_executable(dummy "$GITHUB_WORKSPACE/test/smoke.c")
+          vc9_target_setup(dummy)
+          CMEOF
+          if cmake -B /tmp/test-guard/build -S /tmp/test-guard 2>&1; then
+            echo "FAIL: vc9_target_setup should reject native Linux build"
+            exit 1
+          fi
+          echo "vc9_target_setup cross-compilation guard — PASSED"
+
   # ── Full build tests (manual dispatch) ────────────────────────────
   #
   # Downloads SDK 7.0 (1.48 GB) + VS2008 SP1 (832 MB) ISOs once, then
