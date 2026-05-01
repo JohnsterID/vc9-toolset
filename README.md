@@ -279,6 +279,68 @@ set(CMAKE_LINKER lld-link)
 #        -DVC9_ROOT=/path/to/vc9sp1 ..
 ```
 
+### C++ standard support
+
+When cross-compiling with clang, the C++ **language** standard can be set
+independently of the VC9 **library** (STL).  Clang provides the language
+features; the VC9 headers provide the standard library.
+
+| Standard | Language features | VC9 STL | Status |
+|----------|-------------------|---------|--------|
+| C++03 | *(baseline)* | full | supported |
+| C++11 | auto, lambda, nullptr, constexpr, range-for, rvalue refs, scoped enums, variadic templates, ... | full | supported |
+| C++14 | generic lambdas, relaxed constexpr, variable templates, binary literals, `decltype(auto)`, ... | full | supported |
+| C++17 | structured bindings, `if constexpr`, fold expressions, inline variables, nested namespaces, `[[nodiscard]]`, ... | full | supported |
+| C++20 | concepts, `consteval`, `constinit`, designated initializers, abbreviated templates, `using enum`, `[[likely]]`, ... | full | supported |
+| C++23 | deducing this, `static operator()`, `if consteval`, multidimensional `operator[]`, `auto(x)`, `[[assume]]`, ... | full | supported |
+| C++26 | | | **fails** -- `delete` of `void*` became ill-formed (P2593R1), breaks VC9's `xlocale` header |
+
+All standards from C++03 through C++23 compile and link on both x86 and
+x64, verified with clang 19 and 22.  The generated PE32/PE32+ binaries
+link against MSVCR90.dll/MSVCP90.dll as expected.
+
+**Key constraints:**
+
+- **`-fdelayed-template-parsing` is mandatory.** VC9 headers rely on
+  MSVC-style lazy template parsing.  Without this flag, templates in
+  `<xutility>` fail to resolve `::stdext::` and
+  `::_invalid_parameter_noinfo()`.  The toolchain cmake module sets this
+  automatically.
+
+- **Library is C++03 + TR1.**  Language features are unlimited (up to
+  C++23), but the STL containers, algorithms, and utilities are VC9's
+  C++03 implementations.  C++11 library additions (`<thread>`,
+  `<chrono>`, `<regex>`, `<type_traits>`, `<atomic>`, etc.) are not
+  available.  TR1 extensions (`std::tr1::shared_ptr`,
+  `std::tr1::unordered_map`, etc.) are available via `_HAS_TR1`.
+
+- **`-Wno-delayed-template-parsing-in-cxx20`** is included in the
+  toolchain flags to suppress clang's deprecation warning at C++20+.
+
+**CMake:**
+
+```cmake
+set(CMAKE_CXX_STANDARD 23)          # use C++23 language features
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+```
+
+**Command line:**
+
+```bash
+clang++ -std=c++23 --target=i686-pc-windows-msvc \
+  -fms-compatibility -fms-extensions -fdelayed-template-parsing \
+  -Wno-delayed-template-parsing-in-cxx20 \
+  -include "$COMPAT/vc9_compat.h" \
+  -U_MSC_VER -D_MSC_VER=1500 \
+  -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+  -c myfile.cpp -o myfile.obj
+```
+
+**Probe test:** `test/cpp_std_probe.cpp` exercises language features from
+each standard level combined with VC9 STL types.  Run
+`test/probe-cpp-std.sh <vc9_root>` to test all 6 standards on both
+architectures (12 compile+link combinations).
+
 ### Compat layer explained
 
 The `compat/` directory handles two categories of issues when using VC9/SDK 7.0
