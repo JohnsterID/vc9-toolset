@@ -148,6 +148,7 @@ function(vc9_setup DEST_DIR)
         "-fms-compatibility"
         "-fms-extensions"
         "-fdelayed-template-parsing"
+        "-Wno-delayed-template-parsing-in-cxx20"
         "SHELL:-include ${_vc9_script_dir}/compat/vc9_compat.h"
         "-U_MSC_VER" "-D_MSC_VER=1500"
         ${_vc9_crt_defs}
@@ -197,6 +198,7 @@ function(vc9_target_setup target)
         "-fms-compatibility"
         "-fms-extensions"
         "-fdelayed-template-parsing"
+        "-Wno-delayed-template-parsing-in-cxx20"
         "SHELL:-include ${VC9_COMPAT_HEADER}"
         "-U_MSC_VER" "-D_MSC_VER=1500"
     )
