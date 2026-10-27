@@ -1356,17 +1356,17 @@ jobs:
           }
           if ($env:VC9_ROOT -ne "${{ steps.vc9.outputs.root }}") { throw "VC9_ROOT not exported" }
 
-      - name: 'MSBuild: build smoke.vcxproj /p:PlatformToolset=v90'
+      - name: 'MSBuild: build smoke.vcxproj /p:PlatformToolset=v90 (no environment setup)'
         shell: cmd
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
-          set "VCDir=${{ steps.vc9.outputs.vc-dir }}"
-          set "SDKDir=${{ steps.vc9.outputs.sdk-dir }}"
-          set "INCLUDE=%VCDir%\include;%SDKDir%\Include"
-          set "LIB=%VCDir%\lib;%SDKDir%\Lib"
-          set "PATH=%VCDir%\bin;%PATH%"
-          msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 /p:UseEnv=true /p:TrackFileAccess=false /v:minimal
+          msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 /v:normal > msbuild.log
+          set "RC=%ERRORLEVEL%"
+          type msbuild.log
+          if not "%RC%"=="0" exit /b 1
+          findstr /i /c:"Microsoft Visual Studio 9.0\VC\bin\cl.exe" msbuild.log >nul || (echo FAIL: the build did not use VC9's cl.exe & exit /b 1)
+          findstr /i /c:"Windows\v7.0\Include" msbuild.log >nul || (echo FAIL: the build did not use the SDK 7.0 headers & exit /b 1)
           if errorlevel 1 exit /b 1
           for /f "tokens=*" %%f in ('dir /s /b test\*.exe') do (
             dumpbin /headers "%%f" | findstr /c:"9.00 linker version" || (echo FAIL: %%f is not linked by VC9 & exit /b 1)

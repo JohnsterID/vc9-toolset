@@ -324,7 +324,14 @@ if (Test-Path $vswhere) {
             #   layout vs v170's bin\Hostx86\x86\ layout)
             # - LinkCompiled: v170 CL task tracker normally sets this; VC9's cl.exe
             #   doesn't use the tracker, so we set it statically
+            # - TrackFileAccess=false: VC9's cl.exe cannot run under v170's file tracker
+            # - IncludePath/LibraryPath/ExecutablePath: the stock props only set these when empty, and
+            #   v170 has already filled them with the current toolset's paths, so set VC9 + SDK 7.0 here
+            #   (absolute: VCInstallDir is not defined yet); /p:UseEnv=true still takes them from the environment
+            # - WindowsSdkDir: the stock props read CurrentInstallFolder, which another SDK may own and which
+            #   needs a trailing backslash; set it last to the SDK 7.0 this script installed
             $binDir = "${VCInstallDir}bin"
+            $sdkDir = "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v7.0\"
             $propsContent = $propsContent -replace '(<PropertyGroup>)', @"
 `$1
     <_PlatformToolsetFound>true</_PlatformToolsetFound>
@@ -337,6 +344,14 @@ if (Test-Path $vswhere) {
     <LibToolPath>$binDir</LibToolPath>
     <LibToolExe>lib.exe</LibToolExe>
     <LinkCompiled>true</LinkCompiled>
+    <TrackFileAccess>false</TrackFileAccess>
+    <IncludePath Condition="'`$(UseEnv)' != 'true'">${VCInstallDir}include;${VCInstallDir}atlmfc\include;${sdkDir}Include</IncludePath>
+    <LibraryPath Condition="'`$(UseEnv)' != 'true'">${VCInstallDir}lib;${VCInstallDir}atlmfc\lib;${sdkDir}Lib</LibraryPath>
+    <ExecutablePath Condition="'`$(UseEnv)' != 'true'">$binDir;${sdkDir}Bin;${VSInstallDir}Common7\IDE;`$(PATH)</ExecutablePath>
+"@
+            $propsContent = $propsContent -replace '(</PropertyGroup>)', @"
+    <WindowsSdkDir Condition="'`$(UseEnv)' != 'true'">$sdkDir</WindowsSdkDir>
+  `$1
 "@
             $propsContent | Out-File "$toolsetDir\Toolset.props" -Encoding UTF8
 
