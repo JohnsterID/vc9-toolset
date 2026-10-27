@@ -1,0 +1,108 @@
+name: 'Setup VC9 SP1 toolset (v90)'
+description: 'Visual C++ 2008 SP1 compiler, CRT and Windows SDK 7.0: MSBuild PlatformToolset=v90 on Windows, clang cross-builds on Linux'
+author: 'JohnsterID'
+branding:
+  icon: 'package'
+  color: 'blue'
+
+inputs:
+  debug-crt:
+    description: 'Also install the debug CRT (/MDd, /MTd) from VS2008 SP1'
+    default: 'false'
+  cache:
+    description: 'Cache the verified setup files with actions/cache, so later runs skip the downloads'
+    default: 'true'
+  destination:
+    description: 'Linux/macOS only: where to extract the toolchain (default: $RUNNER_TEMP/vc9sp1)'
+    default: ''
+
+outputs:
+  root:
+    description: 'VC9 root: "Microsoft Visual Studio 9.0" on Windows, the extraction folder on Linux/macOS'
+    value: ${{ steps.windows.outputs.root || steps.unix.outputs.root }}
+  vc-dir:
+    description: 'VC folder (bin, include, lib)'
+    value: ${{ steps.windows.outputs.vc-dir || steps.unix.outputs.vc-dir }}
+  sdk-dir:
+    description: 'Windows SDK 7.0 folder (Include, Lib)'
+    value: ${{ steps.windows.outputs.sdk-dir || steps.unix.outputs.sdk-dir }}
+  cmake-module:
+    description: 'Path to vc9-toolset.cmake (vc9_setup, vc9_target_setup)'
+    value: ${{ format('{0}/vc9-toolset.cmake', github.action_path) }}
+  cache-hit:
+    description: 'true when the setup files came from the cache'
+    value: ${{ steps.cache.outputs.cache-hit == 'true' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up paths
+      id: paths
+      shell: bash
+      env:
+        DEBUG_CRT: ${{ inputs.debug-crt }}
+      run: |
+        echo "setup-dir=$RUNNER_TEMP/vc9-setup" >> "$GITHUB_OUTPUT"
+        # Bump the version when fetch-vc9.sh changes what it keeps
+        key="vc9-setup-v1-${RUNNER_OS}-sdk70"
+        [ "$DEBUG_CRT" = true ] && key="$key-sp1"
+        echo "key=$key" >> "$GITHUB_OUTPUT"
+
+    - name: Cache setup files
+      id: cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.paths.outputs.setup-dir }}
+        key: ${{ steps.paths.outputs.key }}
+
+    - name: Download and verify setup files
+      shell: bash
+      env:
+        DEBUG_CRT: ${{ inputs.debug-crt }}
+        SETUP_DIR: ${{ steps.paths.outputs.setup-dir }}
+      run: |
+        args=()
+        [ "$DEBUG_CRT" = true ] && args+=(--include-debug-crt)
+        bash "$GITHUB_ACTION_PATH/fetch-vc9.sh" "${args[@]}" "$SETUP_DIR"
+
+    - name: Install VC9 SP1 (Windows)
+      id: windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        DEBUG_CRT: ${{ inputs.debug-crt }}
+        SETUP_DIR: ${{ steps.paths.outputs.setup-dir }}
+      run: |
+        $installArgs = @{ SetupDir = $env:SETUP_DIR; NoPrompt = $true; IncludeDebugCRT = ($env:DEBUG_CRT -eq 'true') }
+        & "$env:GITHUB_ACTION_PATH\install-vc9.ps1" @installArgs
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        $root = "${env:ProgramFiles(x86)}\Microsoft Visual Studio 9.0"
+        if (-not (Test-Path "$root\VC\bin\cl.exe")) { throw "cl.exe not found in $root\VC\bin" }
+        "root=$root", "vc-dir=$root\VC", "sdk-dir=${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v7.0" | Add-Content $env:GITHUB_OUTPUT
+        "VC9_ROOT=$root" | Add-Content $env:GITHUB_ENV
+
+    - name: Extract VC9 SP1 (Linux/macOS)
+      id: unix
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        DEBUG_CRT: ${{ inputs.debug-crt }}
+        SETUP_DIR: ${{ steps.paths.outputs.setup-dir }}
+        DEST: ${{ inputs.destination }}
+      run: |
+        if ! command -v msiextract >/dev/null 2>&1 || ! command -v 7z >/dev/null 2>&1; then
+          if [ "$RUNNER_OS" = macOS ]; then
+            brew install msitools p7zip
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq msitools p7zip-full
+          fi
+        fi
+        args=(--setup-dir="$SETUP_DIR")
+        [ "$DEBUG_CRT" = true ] && args+=(--include-debug-crt)
+        root="${DEST:-$RUNNER_TEMP/vc9sp1}"
+        bash "$GITHUB_ACTION_PATH/extract-vc9.sh" "${args[@]}" "$root"
+        test -f "$root/VC/bin/cl.exe" || { echo "::error::cl.exe not found in $root/VC/bin"; exit 1; }
+        printf 'root=%s\nvc-dir=%s\nsdk-dir=%s\n' "$root" "$root/VC" "$root/WinSDK" >> "$GITHUB_OUTPUT"
+        echo "VC9_ROOT=$root" >> "$GITHUB_ENV"

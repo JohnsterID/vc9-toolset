@@ -17,21 +17,25 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Bash syntax check
         run: |
           bash -n extract-vc9.sh
+          bash -n fetch-vc9.sh
           bash -n test/probe-cpp-std.sh
 
       - name: Shell lint (shellcheck)
         run: |
+          shellcheck fetch-vc9.sh
           shellcheck extract-vc9.sh || true  # advisory, don't block
           shellcheck test/probe-cpp-std.sh || true
 
       - name: Verify repo files exist
         run: |
           test -f extract-vc9.sh
+          test -f fetch-vc9.sh
+          test -f action.yml
           test -f install-vc9.ps1
           test -f vc9-toolset.cmake
           test -f CMakeLists.txt
@@ -39,6 +43,7 @@ jobs:
           test -f MSBuild/v90/Microsoft.Cpp.Win32.v90.targets
           test -f test/cpp_std_probe.cpp
           test -x extract-vc9.sh
+          test -x fetch-vc9.sh
           test -x test/probe-cpp-std.sh
           echo "All repo files present and scripts are executable"
 
@@ -46,7 +51,7 @@ jobs:
   cmake-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Create mock extraction output
         run: |
@@ -292,7 +297,7 @@ jobs:
     steps:
       - name: Cache SDK 7.0 ISO
         id: cache-iso
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -312,7 +317,7 @@ jobs:
 
       - name: Cache VS2008 SP1 ISO
         id: cache-sp1
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: VS2008SP1ENUX1512962.iso
           key: vs2008sp1-iso-871700480
@@ -335,7 +340,7 @@ jobs:
     needs: download-isos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install tools
         run: |
@@ -343,7 +348,7 @@ jobs:
           sudo apt-get install -y p7zip-full msitools clang lld
 
       - name: Restore cached ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -602,7 +607,7 @@ jobs:
     needs: download-isos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install tools
         run: |
@@ -610,14 +615,14 @@ jobs:
           sudo apt-get install -y p7zip-full msitools clang lld
 
       - name: Restore cached SDK 7.0 ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
           enableCrossOsArchive: true
 
       - name: Restore cached SP1 ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: VS2008SP1ENUX1512962.iso
           key: vs2008sp1-iso-871700480
@@ -727,10 +732,10 @@ jobs:
     needs: download-isos
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore cached ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -892,17 +897,17 @@ jobs:
     needs: download-isos
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore cached SDK 7.0 ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
           enableCrossOsArchive: true
 
       - name: Restore cached SP1 ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: VS2008SP1ENUX1512962.iso
           key: vs2008sp1-iso-871700480
@@ -971,10 +976,10 @@ jobs:
     needs: download-isos
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore cached ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -1051,10 +1056,10 @@ jobs:
     needs: download-isos
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore cached ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -1188,7 +1193,7 @@ jobs:
     needs: download-isos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install tools
         run: |
@@ -1196,7 +1201,7 @@ jobs:
           sudo apt-get install -y p7zip-full msitools clang lld
 
       - name: Restore cached ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -1326,3 +1331,95 @@ jobs:
             echo "FAIL: smoke_c.exe has spurious MSVCR90D.dll import (debug CRT leak)"; exit 1
           fi
           echo "Ninja x64 build PASSED"
+
+  # ── GitHub Action (action.yml) ─────────────────────────────────────
+  action-windows:
+    name: 'Action: Windows (MSBuild v90, debug CRT)'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run the action
+        id: vc9
+        uses: ./
+        with:
+          debug-crt: 'true'
+
+      - name: Check outputs
+        shell: pwsh
+        run: |
+          Write-Host "root=${{ steps.vc9.outputs.root }} vc-dir=${{ steps.vc9.outputs.vc-dir }} sdk-dir=${{ steps.vc9.outputs.sdk-dir }} cache-hit=${{ steps.vc9.outputs.cache-hit }}"
+          foreach ($f in @("${{ steps.vc9.outputs.vc-dir }}\bin\cl.exe", "${{ steps.vc9.outputs.vc-dir }}\lib\msvcrtd.lib",
+                           "${{ steps.vc9.outputs.sdk-dir }}\Include\windows.h", "${{ steps.vc9.outputs.cmake-module }}")) {
+            if (-not (Test-Path $f)) { throw "missing: $f" }
+            Write-Host "OK: $f"
+          }
+          if ($env:VC9_ROOT -ne "${{ steps.vc9.outputs.root }}") { throw "VC9_ROOT not exported" }
+
+      - name: 'MSBuild: build smoke.vcxproj /p:PlatformToolset=v90'
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
+          set "VCDir=${{ steps.vc9.outputs.vc-dir }}"
+          set "SDKDir=${{ steps.vc9.outputs.sdk-dir }}"
+          set "INCLUDE=%VCDir%\include;%SDKDir%\Include"
+          set "LIB=%VCDir%\lib;%SDKDir%\Lib"
+          set "PATH=%VCDir%\bin;%PATH%"
+          msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 /p:UseEnv=true /p:TrackFileAccess=false /v:minimal
+          if errorlevel 1 exit /b 1
+          for /f "tokens=*" %%f in ('dir /s /b test\*.exe') do (
+            dumpbin /headers "%%f" | findstr /c:"9.00 linker version" || (echo FAIL: %%f is not linked by VC9 & exit /b 1)
+            "%%f" || exit /b 1
+          )
+
+  action-linux:
+    name: 'Action: Linux (clang cross-build)'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run the action
+        id: vc9
+        uses: ./
+
+      - name: Check outputs
+        run: |
+          echo "root=${{ steps.vc9.outputs.root }} cache-hit=${{ steps.vc9.outputs.cache-hit }}"
+          for f in "${{ steps.vc9.outputs.vc-dir }}/bin/cl.exe" "${{ steps.vc9.outputs.vc-dir }}/lib/msvcrt.lib" \
+                   "${{ steps.vc9.outputs.sdk-dir }}/Include/windows.h" "${{ steps.vc9.outputs.cmake-module }}"; do
+            test -e "$f" || { echo "missing: $f"; exit 1; }
+            echo "OK: $f"
+          done
+          test "$VC9_ROOT" = "${{ steps.vc9.outputs.root }}"
+
+      - name: 'Clang cross-compile and lld-link: smoke.cpp'
+        run: |
+          sudo apt-get install -y -qq clang lld
+          VC9="${{ steps.vc9.outputs.root }}"
+          clang++ --target=i686-pc-windows-msvc -fms-compatibility -fms-extensions -fdelayed-template-parsing \
+            -include compat/vc9_compat.h -U_MSC_VER -D_MSC_VER=1500 \
+            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -c test/smoke.cpp -o "$RUNNER_TEMP/smoke.obj"
+          clang++ --target=i686-pc-windows-msvc -fms-compatibility -fms-extensions \
+            -isystem "$VC9/VC/include" -c compat/vc9_runtime_stubs.cpp -o "$RUNNER_TEMP/stubs.obj"
+          lld-link /OUT:"$RUNNER_TEMP/smoke.exe" /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
+            /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
+            "$RUNNER_TEMP/smoke.obj" "$RUNNER_TEMP/stubs.obj" msvcrt.lib msvcprt.lib kernel32.lib
+          file "$RUNNER_TEMP/smoke.exe" | grep -q "PE32 executable"
+
+  action-cache-hit:
+    name: 'Action: Linux, second run (cache hit)'
+    needs: action-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run the action
+        id: vc9
+        uses: ./
+
+      - name: Expect a cache hit
+        run: |
+          test "${{ steps.vc9.outputs.cache-hit }}" = true || { echo "::error::expected a cache hit"; exit 1; }
+          test -f "${{ steps.vc9.outputs.vc-dir }}/bin/cl.exe"
