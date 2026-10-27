@@ -1,0 +1,4 @@
+C:\src\Win32Headers.h(54): fatal error C1083: Cannot open include file: 'Windows.h': No such file or directory [C:\src\p.vcxproj]
+LINK : fatal error LNK1104: cannot open file 'winmm.lib' [C:\src\p.vcxproj]
+src/c.cpp:10:5: error: use of undeclared identifier 'foo'
+lld-link: warning: Cannot use debug info for 'x.obj' [LNK4099]

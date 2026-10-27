@@ -1,0 +1,9 @@
+C:\src\a.cpp(12): warning C4100: 'x' : unreferenced formal parameter [C:\src\p.vcxproj]
+LINK : warning LNK4075: ignoring '/INCREMENTAL' due to '/LTCG' specification [C:\src\p.vcxproj]
+Lib.lib(Obj.obj) : warning LNK4099: PDB 'vc90.pdb' was not found with 'Lib.lib'; linking object as if no debug info [C:\src\p.vcxproj]
+EXEC : warning : No git tags found. Using commit hash only. [C:\src\p.vcxproj]
+Build succeeded.
+  C:\src\a.cpp(12): warning C4100: 'x' : unreferenced formal parameter [C:\src\p.vcxproj]
+  LINK : warning LNK4075: ignoring '/INCREMENTAL' due to '/LTCG' specification [C:\src\p.vcxproj]
+    4 Warning(s)
+    0 Error(s)

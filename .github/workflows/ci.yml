@@ -1423,3 +1423,32 @@ jobs:
         run: |
           test "${{ steps.vc9.outputs.cache-hit }}" = true || { echo "::error::expected a cache hit"; exit 1; }
           test -f "${{ steps.vc9.outputs.vc-dir }}/bin/cl.exe"
+
+  action-analyze-build-log:
+    name: 'Action: analyze-build-log'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Warnings only
+        id: warnings
+        uses: ./analyze-build-log
+        with:
+          logs: |
+            MSBuild=test/logs/msbuild-warnings.log
+            Missing=test/logs/does-not-exist.log
+
+      - name: Errors (must fail)
+        id: errors
+        continue-on-error: true
+        uses: ./analyze-build-log
+        with:
+          logs: Errors=test/logs/errors.log
+
+      - name: Check results
+        run: |
+          test "${{ steps.warnings.outcome }}" = success
+          test "${{ steps.errors.outcome }}" = failure
+          test "${{ steps.warnings.outputs.warnings }}/${{ steps.warnings.outputs.errors }}" = 4/0
+          test "${{ steps.errors.outputs.warnings }}/${{ steps.errors.outputs.errors }}" = 1/3
+          echo "analyze-build-log: counts and exit codes as expected"

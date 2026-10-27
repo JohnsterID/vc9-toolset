@@ -43,6 +43,22 @@ runs do not download the 1.48 GB ISO again.
 
 `VC9_ROOT` is also set for the following steps.
 
+### Build log analysis
+
+```yaml
+- uses: JohnsterID/vc9-toolset/analyze-build-log@v1
+  if: always()
+  with:
+    logs: |
+      MSVC Debug=msvc_debug_msbuild.log
+      MSVC Release=msvc_release_msbuild.log
+```
+
+Annotates every warning and error in MSBuild and Clang logs, including the ones without a file and line
+(`LINK : fatal error LNK1104`, `EXEC : warning`, `lld-link: warning`) and `fatal error` lines, counts each once
+(MSBuild repeats them in its summary, and the v90 toolset links twice when it embeds a manifest), writes a table to
+the job summary, sets the `warnings` and `errors` outputs, and fails when there are errors.
+
 Outside GitHub Actions, `fetch-vc9.sh <dir>` downloads and verifies the same setup files, and
 `install-vc9.ps1 -SetupDir <dir>` / `extract-vc9.sh --setup-dir=<dir>` install from them.
 

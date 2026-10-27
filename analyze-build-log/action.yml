@@ -1,0 +1,29 @@
+name: 'Analyze MSBuild and Clang build logs'
+description: 'Counts and annotates the warnings and errors in MSBuild (v90 and later) and Clang build logs; fails on errors'
+author: 'JohnsterID'
+
+inputs:
+  logs:
+    description: 'One "Label=path/to/build.log" per line. A missing log is reported as "not run".'
+    required: true
+
+outputs:
+  warnings:
+    description: 'Distinct warnings in all logs'
+    value: ${{ steps.analyze.outputs.warnings }}
+  errors:
+    description: 'Distinct errors in all logs'
+    value: ${{ steps.analyze.outputs.errors }}
+
+runs:
+  using: composite
+  steps:
+    - name: Analyze build logs
+      id: analyze
+      shell: pwsh
+      env:
+        LOGS: ${{ inputs.logs }}
+      run: |
+        $logs = @($env:LOGS -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        & "$env:GITHUB_ACTION_PATH/analyze-build-log.ps1" @logs
+        exit $LASTEXITCODE
