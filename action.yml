@@ -28,7 +28,7 @@ outputs:
     value: ${{ steps.windows.outputs.sdk-dir || steps.unix.outputs.sdk-dir }}
   cmake-module:
     description: 'Path to vc9-toolset.cmake (vc9_setup, vc9_target_setup)'
-    value: ${{ format('{0}/vc9-toolset.cmake', github.action_path) }}
+    value: ${{ steps.windows.outputs.cmake-module || steps.unix.outputs.cmake-module }}
   cache-hit:
     description: 'true when the setup files came from the cache'
     value: ${{ steps.cache.outputs.cache-hit == 'true' }}
@@ -79,7 +79,8 @@ runs:
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
         $root = "${env:ProgramFiles(x86)}\Microsoft Visual Studio 9.0"
         if (-not (Test-Path "$root\VC\bin\cl.exe")) { throw "cl.exe not found in $root\VC\bin" }
-        "root=$root", "vc-dir=$root\VC", "sdk-dir=${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v7.0" | Add-Content $env:GITHUB_OUTPUT
+        "root=$root", "vc-dir=$root\VC", "sdk-dir=${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v7.0",
+            "cmake-module=$env:GITHUB_ACTION_PATH\vc9-toolset.cmake" | Add-Content $env:GITHUB_OUTPUT
         "VC9_ROOT=$root" | Add-Content $env:GITHUB_ENV
 
     - name: Extract VC9 SP1 (Linux/macOS)
@@ -104,5 +105,6 @@ runs:
         root="${DEST:-$RUNNER_TEMP/vc9sp1}"
         bash "$GITHUB_ACTION_PATH/extract-vc9.sh" "${args[@]}" "$root"
         test -f "$root/VC/bin/cl.exe" || { echo "::error::cl.exe not found in $root/VC/bin"; exit 1; }
-        printf 'root=%s\nvc-dir=%s\nsdk-dir=%s\n' "$root" "$root/VC" "$root/WinSDK" >> "$GITHUB_OUTPUT"
+        printf 'root=%s\nvc-dir=%s\nsdk-dir=%s\ncmake-module=%s\n' "$root" "$root/VC" "$root/WinSDK" \
+          "$GITHUB_ACTION_PATH/vc9-toolset.cmake" >> "$GITHUB_OUTPUT"
         echo "VC9_ROOT=$root" >> "$GITHUB_ENV"

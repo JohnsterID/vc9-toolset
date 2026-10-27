@@ -15,6 +15,37 @@ Installs Visual C++ 2008 SP1 (`PlatformToolset=v90`) for use with Visual Studio 
 2. Installs MSBuild v90 toolset files (bundled in this repository)
 3. Sets up registry keys and environment for MSBuild (works with all VS versions)
 
+## GitHub Action
+
+```yaml
+- uses: JohnsterID/vc9-toolset@v1   # or a full commit SHA
+  id: vc9
+  with:
+    debug-crt: false   # true: also the debug CRT (/MDd, /MTd) from VS2008 SP1
+```
+
+- **Windows runners:** installs VC9 SP1 and the MSBuild v90 toolset files, so `msbuild /p:PlatformToolset=v90`
+  works (see the `action-windows` job in `.github/workflows/ci.yml` for a complete build step).
+- **Linux runners (macOS untested):** extracts the toolchain without admin rights for clang cross-builds
+  (`--target=i686-pc-windows-msvc`), see [Clang Cross-Compilation from Linux](#clang-cross-compilation-from-linux).
+
+Downloads are verified by size and SHA-256 (a mirror that answers with an HTML page fails the check and the next
+URL is tried), and only the setup files that get installed are cached (`cache: false` to turn that off), so later
+runs do not download the 1.48 GB ISO again.
+
+| Output | Windows | Linux |
+|--------|---------|-------|
+| `root` | `C:\Program Files (x86)\Microsoft Visual Studio 9.0` | the extraction folder (`destination`, default `$RUNNER_TEMP/vc9sp1`) |
+| `vc-dir` | `<root>\VC` | `<root>/VC` |
+| `sdk-dir` | `C:\Program Files (x86)\Microsoft SDKs\Windows\v7.0` | `<root>/WinSDK` |
+| `cmake-module` | path to `vc9-toolset.cmake` | same |
+| `cache-hit` | `true` when the setup files came from the cache | same |
+
+`VC9_ROOT` is also set for the following steps.
+
+Outside GitHub Actions, `fetch-vc9.sh <dir>` downloads and verifies the same setup files, and
+`install-vc9.ps1 -SetupDir <dir>` / `extract-vc9.sh --setup-dir=<dir>` install from them.
+
 ## Requirements
 
 - Windows 10/11

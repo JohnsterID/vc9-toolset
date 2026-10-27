@@ -146,6 +146,8 @@ function Expand-IsoToPath {
 Write-Host "[1/4] Installing VC9 SP1 from Windows SDK 7.0..." -ForegroundColor Green
 
 if ($SetupDir) {
+    # msiexec cannot open a package path with mixed separators (exit 1619), e.g. D:\a\_temp/vc9-setup from bash
+    $SetupDir = [System.IO.Path]::GetFullPath($SetupDir)
     if (-not (Test-Path "$SetupDir\sdk70\.complete")) {
         Write-Error "$SetupDir has no complete sdk70 folder. Run fetch-vc9.sh `"$SetupDir`" first."
         exit 1
