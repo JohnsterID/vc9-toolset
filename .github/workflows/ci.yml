@@ -1361,11 +1361,16 @@ jobs:
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
-          msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 /v:normal > msbuild.log
-          set "RC=%ERRORLEVEL%"
-          type msbuild.log
-          if not "%RC%"=="0" exit /b 1
-          findstr /i /c:"Microsoft Visual Studio 9.0\VC\bin\cl.exe" msbuild.log >nul || (echo FAIL: the build did not use VC9's cl.exe & exit /b 1)
+          for %%c in (Debug Release) do (
+            msbuild test\smoke.vcxproj /p:Configuration=%%c /p:Platform=Win32 /p:PlatformToolset=v90 /v:normal > msbuild-%%c.log
+            if errorlevel 1 (type msbuild-%%c.log & echo FAIL: %%c build & exit /b 1)
+            type msbuild-%%c.log
+            findstr /i /c:"Microsoft Visual Studio 9.0\VC\bin\cl.exe" msbuild-%%c.log >nul || (echo FAIL: %%c did not use VC9's cl.exe & exit /b 1)
+            rem v170 defaults that VC9 doesn't support: cl D9002 unknown option, link LNK1117/LNK4044
+            findstr /r /c:"D9002" /c:"LNK1117" /c:"LNK4044" msbuild-%%c.log && (echo FAIL: %%c passed a switch VC9 doesn't have & exit /b 1)
+            rem VS2010's Win32 default, which keeps frame pointers under /Ox
+            findstr /c:" /Oy- " msbuild-%%c.log >nul || (echo FAIL: %%c has no /Oy- & exit /b 1)
+          )
           rem The CL task passes IncludePath through the environment, so the next step checks the evaluated properties
           msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 -getProperty:IncludePath -getProperty:LibraryPath -getProperty:WindowsSdkDir > props.json
           for /f "tokens=*" %%f in ('dir /s /b test\*.exe') do (

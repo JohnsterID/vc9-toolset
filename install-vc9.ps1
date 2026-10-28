@@ -345,13 +345,43 @@ if (Test-Path $vswhere) {
     <LibToolExe>lib.exe</LibToolExe>
     <LinkCompiled>true</LinkCompiled>
     <TrackFileAccess>false</TrackFileAccess>
+    <LegacyManifestEmbedding>true</LegacyManifestEmbedding>
     <IncludePath Condition="'`$(UseEnv)' != 'true'">${VCInstallDir}include;${VCInstallDir}atlmfc\include;${sdkDir}Include</IncludePath>
     <LibraryPath Condition="'`$(UseEnv)' != 'true'">${VCInstallDir}lib;${VCInstallDir}atlmfc\lib;${sdkDir}Lib</LibraryPath>
     <ExecutablePath Condition="'`$(UseEnv)' != 'true'">$binDir;${sdkDir}Bin;${VSInstallDir}Common7\IDE;`$(PATH)</ExecutablePath>
 "@
-            $propsContent = $propsContent -replace '(</PropertyGroup>)', @"
+            # - LegacyManifestEmbedding: v170 embeds manifests with link /MANIFEST:EMBED, which VC9's link.exe
+            #   doesn't have; this restores the VS2010 way (mt.exe and a second link)
+            # - Microsoft.Cpp.Common.props: the ClCompile/Link/Lib item defaults (ProgramDataBaseFileName,
+            #   ObjectFileName, Link OutputFile, ...); v143 gets it through Microsoft.Cpp.MSVC.Toolset.Common.props.
+            #   The item defaults set before it are the VS2010 ones where v170 differs: the Win32 platform defaults
+            #   from VS2010's Microsoft.Cpp.Win32.props (Platform.Common.props would also add /SAFESEH), no /FC
+            #   (it puts full paths into __FILE__), and no /DEBUG unless the project asks for it
+            $propsContent = $propsContent -replace '\s*(</PropertyGroup>)', @"
+
     <WindowsSdkDir Condition="'`$(UseEnv)' != 'true'">$sdkDir</WindowsSdkDir>
   `$1
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <EnablePREfast Condition="'%(ClCompile.EnablePREfast)' == ''">false</EnablePREfast>
+      <OmitFramePointers Condition="'%(ClCompile.OmitFramePointers)' == ''">false</OmitFramePointers>
+      <DebugInformationFormat Condition="'%(ClCompile.DebugInformationFormat)' == '' and '`$(UseDebugLibraries)' == 'true'">EditAndContinue</DebugInformationFormat>
+      <UseFullPaths Condition="'%(ClCompile.UseFullPaths)' == ''">false</UseFullPaths>
+    </ClCompile>
+    <Link>
+      <TargetMachine Condition="'%(Link.TargetMachine)' == ''">MachineX86</TargetMachine>
+      <GenerateDebugInformation Condition="'%(Link.GenerateDebugInformation)' == ''">false</GenerateDebugInformation>
+    </Link>
+    <Lib>
+      <TargetMachine Condition="'%(Lib.TargetMachine)' == ''">MachineX86</TargetMachine>
+    </Lib>
+    <ImpLib>
+      <TargetMachine Condition="'%(ImpLib.TargetMachine)' == ''">MachineX86</TargetMachine>
+    </ImpLib>
+  </ItemDefinitionGroup>
+
+  <Import Project="`$(VCTargetsPath)\Microsoft.Cpp.Common.props" />
 "@
             $propsContent | Out-File "$toolsetDir\Toolset.props" -Encoding UTF8
 
@@ -364,15 +394,24 @@ if (Test-Path $vswhere) {
             $targetsContent = $targetsContent -replace 'ToolsVersion="4\.0"', ''
             # Insert CppCommon.targets import (same as v110–v143 toolsets).
             # CppCommon imports CppBuild.targets which defines Build/ClCompile/Link.
-            # Override DoLinkOutputFilesMatch: the v170 VCMessage for MSB8012 crashes
-            # with a FormatException when Link.OutputFile metadata is empty (v170 bug).
+            # The ItemDefinitionGroup turns off switches that VC9's cl.exe and link.exe don't have and v170 turns
+            # on by default (/JMC, /Zc:inline, /diagnostics:column, /DEBUG:FULL, /LTCG:incremental); being in the
+            # targets, it also applies when the project sets them.
             $targetsContent = $targetsContent -replace '</Project>', @"
 
-  <Import Project="`$(VCTargetsPath)\Microsoft.CppCommon.targets" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <SupportJustMyCode>false</SupportJustMyCode>
+      <RemoveUnreferencedCodeData>false</RemoveUnreferencedCodeData>
+      <DiagnosticsFormat></DiagnosticsFormat>
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation Condition="'%(Link.GenerateDebugInformation)' == 'DebugFull' or '%(Link.GenerateDebugInformation)' == 'DebugFastLink'">true</GenerateDebugInformation>
+      <LinkTimeCodeGeneration Condition="'%(Link.LinkTimeCodeGeneration)' == 'UseFastLinkTimeCodeGeneration'">UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+    </Link>
+  </ItemDefinitionGroup>
 
-  <!-- Override v170's DoLinkOutputFilesMatch: its VCMessage MSB8012 crashes with
-       FormatException when Link.OutputFile is empty (no OutputFile metadata on v90) -->
-  <Target Name="DoLinkOutputFilesMatch" />
+  <Import Project="`$(VCTargetsPath)\Microsoft.CppCommon.targets" />
 </Project>
 "@
             $targetsContent | Out-File "$toolsetDir\Toolset.targets" -Encoding UTF8
