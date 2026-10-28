@@ -394,20 +394,40 @@ if (Test-Path $vswhere) {
             $targetsContent = $targetsContent -replace 'ToolsVersion="4\.0"', ''
             # Insert CppCommon.targets import (same as v110–v143 toolsets).
             # CppCommon imports CppBuild.targets which defines Build/ClCompile/Link.
-            # The ItemDefinitionGroup turns off switches that VC9's cl.exe and link.exe don't have and v170 turns
-            # on by default (/JMC, /Zc:inline, /diagnostics:column, /DEBUG:FULL, /LTCG:incremental); being in the
-            # targets, it also applies when the project sets them.
+            # The ItemDefinitionGroup turns off the switches newer than VC9's cl.exe and link.exe that v170/v180
+            # turn on by default (/JMC, /Zc:inline, /diagnostics:column, /external:W3, /DEBUG:FULL, /ILK,
+            # /LTCG:incremental) or that projects made with newer VS often set (/sdl, /permissive-, /std, ...),
+            # like Microsoft.Cpp.ClangCl.Exclusion.props does for clang-cl; being in the targets, it also applies
+            # when the project sets them.
             $targetsContent = $targetsContent -replace '</Project>', @"
 
   <ItemDefinitionGroup>
     <ClCompile>
       <SupportJustMyCode>false</SupportJustMyCode>
       <RemoveUnreferencedCodeData>false</RemoveUnreferencedCodeData>
-      <DiagnosticsFormat></DiagnosticsFormat>
+      <DiagnosticsFormat />
+      <ExternalWarningLevel />
+      <ExternalTemplatesDiagnostics />
+      <TreatAngleIncludeAsExternal />
+      <SDLCheck />
+      <ConformanceMode />
+      <LanguageStandard />
+      <LanguageStandard_C />
+      <UseStandardPreprocessor />
+      <ControlFlowGuard />
+      <GuardEHContMetadata />
+      <SpectreMitigation />
+      <EnableASAN />
+      <IntelJCCErratum />
+      <EnableParallelCodeGeneration />
     </ClCompile>
     <Link>
       <GenerateDebugInformation Condition="'%(Link.GenerateDebugInformation)' == 'DebugFull' or '%(Link.GenerateDebugInformation)' == 'DebugFastLink'">true</GenerateDebugInformation>
       <LinkTimeCodeGeneration Condition="'%(Link.LinkTimeCodeGeneration)' == 'UseFastLinkTimeCodeGeneration'">UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <IncrementalLinkDatabaseFile />
+      <LinkTimeCodeGenerationObjectFile />
+      <CETCompat />
+      <LinkControlFlowGuard />
     </Link>
   </ItemDefinitionGroup>
 
