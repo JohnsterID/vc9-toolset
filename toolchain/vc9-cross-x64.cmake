@@ -25,10 +25,20 @@ set(CMAKE_CXX_COMPILER clang++)
 set(CMAKE_C_COMPILER_TARGET   x86_64-pc-windows-msvc)
 set(CMAKE_CXX_COMPILER_TARGET x86_64-pc-windows-msvc)
 
-# Resource compiler (optional — needed if you have .rc files)
-find_program(_vc9_rc NAMES llvm-rc llvm-rc-19 llvm-rc-18 llvm-rc-17)
+# Resource compiler: CMake's Windows-Clang platform module enables RC, so llvm-rc is required. It comes with
+# LLVM's tools, which not every clang package pulls in (Ubuntu 26.04: apt install llvm), so look next to
+# this clang first, then for the same major version.
+execute_process(COMMAND ${CMAKE_C_COMPILER} -print-resource-dir
+    OUTPUT_VARIABLE _vc9_clang_res OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND ${CMAKE_C_COMPILER} -dumpversion
+    OUTPUT_VARIABLE _vc9_clang_ver OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+string(REGEX MATCH "^[0-9]+" _vc9_clang_major "${_vc9_clang_ver}")
+find_program(_vc9_rc NAMES llvm-rc llvm-rc-${_vc9_clang_major} HINTS "${_vc9_clang_res}/../../../bin")
 if(_vc9_rc)
     set(CMAKE_RC_COMPILER "${_vc9_rc}")
+else()
+    message(FATAL_ERROR "llvm-rc not found; CMake needs a resource compiler for Windows targets. "
+        "Install LLVM's tools for clang ${_vc9_clang_ver}, e.g. apt install llvm")
 endif()
 
 # Skip CMake's compiler-test link — the VC9 libs aren't in standard paths yet

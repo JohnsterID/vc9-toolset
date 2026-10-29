@@ -17,21 +17,25 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Bash syntax check
         run: |
           bash -n extract-vc9.sh
+          bash -n fetch-vc9.sh
           bash -n test/probe-cpp-std.sh
 
       - name: Shell lint (shellcheck)
         run: |
+          shellcheck fetch-vc9.sh
           shellcheck extract-vc9.sh || true  # advisory, don't block
           shellcheck test/probe-cpp-std.sh || true
 
       - name: Verify repo files exist
         run: |
           test -f extract-vc9.sh
+          test -f fetch-vc9.sh
+          test -f action.yml
           test -f install-vc9.ps1
           test -f vc9-toolset.cmake
           test -f CMakeLists.txt
@@ -39,6 +43,7 @@ jobs:
           test -f MSBuild/v90/Microsoft.Cpp.Win32.v90.targets
           test -f test/cpp_std_probe.cpp
           test -x extract-vc9.sh
+          test -x fetch-vc9.sh
           test -x test/probe-cpp-std.sh
           echo "All repo files present and scripts are executable"
 
@@ -46,7 +51,7 @@ jobs:
   cmake-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Create mock extraction output
         run: |
@@ -290,60 +295,43 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.full_build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
+      # The other jobs restore these by key and extract-vc9.sh checks size and SHA-256 again before use
       - name: Cache SDK 7.0 ISO
         id: cache-iso
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
           enableCrossOsArchive: true
 
-      - name: Download SDK 7.0 ISO
-        if: steps.cache-iso.outputs.cache-hit != 'true'
-        run: >-
-          wget -q --show-progress -O GRMSDK_EN_DVD.iso
-          "https://web.archive.org/web/20161230154527/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso"
-
-      - name: Verify ISO size
-        run: |
-          size=$(stat -c%s GRMSDK_EN_DVD.iso)
-          echo "ISO size: $size (expected 1552508928)"
-          [ "$size" = "1552508928" ] || { echo "SIZE MISMATCH"; exit 1; }
-
       - name: Cache VS2008 SP1 ISO
         id: cache-sp1
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: VS2008SP1ENUX1512962.iso
           key: vs2008sp1-iso-871700480
           enableCrossOsArchive: true
 
-      - name: Download VS2008 SP1 ISO
-        if: steps.cache-sp1.outputs.cache-hit != 'true'
-        run: >-
-          wget -q --show-progress -O VS2008SP1ENUX1512962.iso
-          "https://download.microsoft.com/download/a/3/7/a371b6d1-fc5e-44f7-914c-cb452b4043a9/VS2008SP1ENUX1512962.iso"
-
-      - name: Verify SP1 ISO size
-        run: |
-          size=$(stat -c%s VS2008SP1ENUX1512962.iso)
-          echo "SP1 ISO size: $size (expected 871700480)"
-          [ "$size" = "871700480" ] || { echo "SP1 SIZE MISMATCH"; exit 1; }
+      - name: Download and verify the ISOs (downloads.txt)
+        if: steps.cache-iso.outputs.cache-hit != 'true' || steps.cache-sp1.outputs.cache-hit != 'true'
+        run: ./fetch-vc9.sh --include-debug-crt --isos-only .
 
   # ── Linux: extract + cross-compile x86 (/MD + /MT) ────────────────
   linux-cross-compile-x86:
     needs: download-isos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y p7zip-full msitools clang lld
+          sudo apt-get install -y p7zip-full msitools clang lld llvm
 
       - name: Restore cached ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -602,22 +590,22 @@ jobs:
     needs: download-isos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y p7zip-full msitools clang lld
+          sudo apt-get install -y p7zip-full msitools clang lld llvm
 
       - name: Restore cached SDK 7.0 ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
           enableCrossOsArchive: true
 
       - name: Restore cached SP1 ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: VS2008SP1ENUX1512962.iso
           key: vs2008sp1-iso-871700480
@@ -727,10 +715,10 @@ jobs:
     needs: download-isos
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore cached ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -809,7 +797,8 @@ jobs:
       - name: 'Verify PE: dumpbin /dependents + /headers'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           echo === smoke_c.exe dependents ===
           dumpbin /dependents smoke_c.exe
           echo.
@@ -892,17 +881,17 @@ jobs:
     needs: download-isos
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore cached SDK 7.0 ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
           enableCrossOsArchive: true
 
       - name: Restore cached SP1 ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: VS2008SP1ENUX1512962.iso
           key: vs2008sp1-iso-871700480
@@ -956,7 +945,8 @@ jobs:
       - name: 'Verify PE: /MDd links to MSVCR90D.dll'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           dumpbin /dependents smoke_mdd.exe | findstr /i "MSVCR90D" >nul
           if errorlevel 1 (
             echo FAIL: smoke_mdd.exe does not depend on MSVCR90D.dll
@@ -971,10 +961,10 @@ jobs:
     needs: download-isos
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore cached ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -999,17 +989,22 @@ jobs:
       - name: 'MSBuild: build smoke.vcxproj /p:PlatformToolset=v90'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
           set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
           set "INCLUDE=%VCDir%\include;%SDKDir%Include"
           set "LIB=%VCDir%\lib;%SDKDir%Lib"
-          set "PATH=%VCDir%\bin;%PATH%"
+          set "PATH=%VCDir%\bin;%SDKDir%Bin;%PATH%"
 
-          :: UseEnv=true: use INCLUDE/LIB/PATH from environment
+          :: UseEnv=true: use INCLUDE/LIB/PATH from environment, so SDK 7.0's Bin (rc.exe, mt.exe) has to come
+          :: before the newer Windows SDK that vcvars32.bat puts on PATH
           :: TrackFileAccess=false: VC9 cl.exe doesn't use v170's file tracker
-          msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 /p:UseEnv=true /p:TrackFileAccess=false /v:normal
-          if errorlevel 1 exit /b 1
+          msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 /p:UseEnv=true /p:TrackFileAccess=false /v:normal > msbuild-Release.log
+          if errorlevel 1 (type msbuild-Release.log & exit /b 1)
+          type msbuild-Release.log
+          findstr /i /c:"Windows Kits" msbuild-Release.log && (echo FAIL: used a tool from a newer Windows SDK & exit /b 1)
+          findstr /i /c:"Microsoft SDKs\Windows\v7.0\Bin\mt.exe" msbuild-Release.log >nul || (echo FAIL: did not embed the manifest with SDK 7.0's mt.exe & exit /b 1)
           echo --- MSBuild v90 build PASSED ---
 
       - name: Run MSBuild output
@@ -1028,7 +1023,8 @@ jobs:
       - name: 'Verify PE: dumpbin /dependents + /headers (MSBuild output)'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           for /f "tokens=*" %%f in ('dir /s /b test\*.exe 2^>nul') do (
             echo === %%f dependents ===
             dumpbin /dependents "%%f"
@@ -1051,10 +1047,10 @@ jobs:
     needs: download-isos
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore cached ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -1113,7 +1109,8 @@ jobs:
       - name: 'Verify PE: dumpbin /dependents + /headers (clang-cl)'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           echo === smoke_c_clang.exe ===
           dumpbin /dependents smoke_c_clang.exe
           dumpbin /headers smoke_c_clang.exe | findstr /i "linker version machine"
@@ -1166,7 +1163,8 @@ jobs:
       - name: 'Verify PE: probe_cpp23.exe depends on MSVCR90.dll'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           dumpbin /dependents probe_cpp23.exe
           dumpbin /dependents probe_cpp23.exe | findstr /i "MSVCR90" >nul
           if errorlevel 1 (
@@ -1188,15 +1186,15 @@ jobs:
     needs: download-isos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y p7zip-full msitools clang lld
+          sudo apt-get install -y p7zip-full msitools clang lld llvm
 
       - name: Restore cached ISO
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
@@ -1326,3 +1324,176 @@ jobs:
             echo "FAIL: smoke_c.exe has spurious MSVCR90D.dll import (debug CRT leak)"; exit 1
           fi
           echo "Ninja x64 build PASSED"
+
+  # -- GitHub Action (action.yml) -------------------------------------
+  action-windows:
+    name: 'Action: Windows (MSBuild v90, debug CRT, ${{ matrix.os }})'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run the action
+        id: vc9
+        uses: ./
+        with:
+          debug-crt: 'true'
+
+      - name: Check outputs
+        shell: pwsh
+        run: |
+          Write-Host "root=${{ steps.vc9.outputs.root }} vc-dir=${{ steps.vc9.outputs.vc-dir }} sdk-dir=${{ steps.vc9.outputs.sdk-dir }} cache-hit=${{ steps.vc9.outputs.cache-hit }}"
+          foreach ($f in @("${{ steps.vc9.outputs.vc-dir }}\bin\cl.exe", "${{ steps.vc9.outputs.vc-dir }}\lib\msvcrtd.lib",
+                           "${{ steps.vc9.outputs.sdk-dir }}\Include\windows.h", "${{ steps.vc9.outputs.cmake-module }}")) {
+            if (-not (Test-Path $f)) { throw "missing: $f" }
+            Write-Host "OK: $f"
+          }
+          if ($env:VC9_ROOT -ne "${{ steps.vc9.outputs.root }}") { throw "VC9_ROOT not exported" }
+
+      - name: 'MSBuild: build smoke.vcxproj /p:PlatformToolset=v90 (outputs.msbuild, no vcvars32.bat)'
+        shell: cmd
+        env:
+          MSBUILD: ${{ steps.vc9.outputs.msbuild }}
+        run: |
+          if not exist "%MSBUILD%" (echo FAIL: outputs.msbuild "%MSBUILD%" does not exist & exit /b 1)
+          for %%c in (Debug Release) do (
+            "%MSBUILD%" test\smoke.vcxproj /p:Configuration=%%c /p:Platform=Win32 /p:PlatformToolset=v90 /v:normal > msbuild-%%c.log
+            if errorlevel 1 (type msbuild-%%c.log & echo FAIL: %%c build & exit /b 1)
+            type msbuild-%%c.log
+            findstr /i /c:"Microsoft Visual Studio 9.0\VC\bin\cl.exe" msbuild-%%c.log >nul || (echo FAIL: %%c did not use VC9's cl.exe & exit /b 1)
+            rem v170 defaults that VC9 doesn't support: cl D9002 unknown option, link LNK1117/LNK4044
+            findstr /r /c:"D9002" /c:"LNK1117" /c:"LNK4044" msbuild-%%c.log && (echo FAIL: %%c passed a switch VC9 doesn't have & exit /b 1)
+            rem VS2010's Win32 default, which keeps frame pointers under /Ox
+            findstr /c:" /Oy- " msbuild-%%c.log >nul || (echo FAIL: %%c has no /Oy- & exit /b 1)
+            rem rc.exe and mt.exe from SDK 7.0, not a newer SDK's from PATH; findstr reads a backslash before a quote as an escape
+            findstr /i /c:"Windows Kits" msbuild-%%c.log && (echo FAIL: %%c used a tool from a newer Windows SDK & exit /b 1)
+            findstr /i /c:"Microsoft SDKs\Windows\v7.0\Bin\mt.exe" msbuild-%%c.log >nul || (echo FAIL: %%c did not embed the manifest with SDK 7.0's mt.exe & exit /b 1)
+          )
+          rem The CL task passes IncludePath through the environment, so the next step checks the evaluated properties
+          "%MSBUILD%" test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 -getProperty:IncludePath -getProperty:LibraryPath -getProperty:WindowsSdkDir > props.json
+          for /f "tokens=*" %%f in ('dir /s /b test\*.exe') do (
+            "%VC9_ROOT%\VC\bin\link.exe" /dump /headers "%%f" | findstr /c:"9.00 linker version" || (echo FAIL: %%f is not linked by VC9 & exit /b 1)
+            "%%f" || exit /b 1
+          )
+
+      - name: Check the v90 IncludePath, LibraryPath and WindowsSdkDir
+        shell: pwsh
+        run: |
+          $p = (Get-Content props.json -Raw | ConvertFrom-Json).Properties
+          $p | Format-List
+          $vc = [regex]::Escape("Microsoft Visual Studio 9.0\VC\"); $sdk = [regex]::Escape("Microsoft SDKs\Windows\v7.0\")
+          if ($p.IncludePath -notmatch "$vc`include" -or $p.IncludePath -notmatch "$sdk`Include") { throw "IncludePath is not VC9 + SDK 7.0" }
+          if ($p.LibraryPath -notmatch "$vc`lib" -or $p.LibraryPath -notmatch "$sdk`Lib") { throw "LibraryPath is not VC9 + SDK 7.0" }
+          if ($p.WindowsSdkDir -notmatch "$sdk`$") { throw "WindowsSdkDir is not SDK 7.0 with a trailing backslash" }
+          Write-Host "OK: v90 paths are VC9 + SDK 7.0"
+
+  action-linux:
+    name: 'Action: Linux (clang cross-build, ${{ matrix.os }})'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run the action
+        id: vc9
+        uses: ./
+
+      - name: Check outputs
+        run: |
+          echo "root=${{ steps.vc9.outputs.root }} cache-hit=${{ steps.vc9.outputs.cache-hit }}"
+          for f in "${{ steps.vc9.outputs.vc-dir }}/bin/cl.exe" "${{ steps.vc9.outputs.vc-dir }}/lib/msvcrt.lib" \
+                   "${{ steps.vc9.outputs.sdk-dir }}/Include/windows.h" "${{ steps.vc9.outputs.cmake-module }}"; do
+            test -e "$f" || { echo "missing: $f"; exit 1; }
+            echo "OK: $f"
+          done
+          test "$VC9_ROOT" = "${{ steps.vc9.outputs.root }}"
+
+      - name: 'Clang cross-compile and lld-link: smoke.cpp'
+        run: |
+          sudo apt-get install -y -qq clang lld llvm
+          VC9="${{ steps.vc9.outputs.root }}"
+          clang++ --target=i686-pc-windows-msvc -fms-compatibility -fms-extensions -fdelayed-template-parsing \
+            -include compat/vc9_compat.h -U_MSC_VER -D_MSC_VER=1500 \
+            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -c test/smoke.cpp -o "$RUNNER_TEMP/smoke.obj"
+          clang++ --target=i686-pc-windows-msvc -fms-compatibility -fms-extensions \
+            -isystem "$VC9/VC/include" -c compat/vc9_runtime_stubs.cpp -o "$RUNNER_TEMP/stubs.obj"
+          lld-link /OUT:"$RUNNER_TEMP/smoke.exe" /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
+            /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
+            "$RUNNER_TEMP/smoke.obj" "$RUNNER_TEMP/stubs.obj" msvcrt.lib msvcprt.lib kernel32.lib
+          file "$RUNNER_TEMP/smoke.exe" | grep -q "PE32 executable"
+
+      - name: 'CMake toolchain (vc9-cross-x86.cmake) + vc9_target_setup: smoke.c, smoke.cpp'
+        run: |
+          sudo apt-get install -y -qq ninja-build
+          mkdir -p "$RUNNER_TEMP/cm"
+          cat > "$RUNNER_TEMP/cm/CMakeLists.txt" << EOF
+          cmake_minimum_required(VERSION 3.19)
+          project(action_smoke C CXX)
+          include("${{ steps.vc9.outputs.cmake-module }}")
+          vc9_setup("${{ steps.vc9.outputs.root }}")
+          add_executable(smoke_c "$GITHUB_WORKSPACE/test/smoke.c")
+          vc9_target_setup(smoke_c)
+          add_executable(smoke_cpp "$GITHUB_WORKSPACE/test/smoke.cpp" "\${VC9_RUNTIME_STUBS_SRC}")
+          vc9_target_setup(smoke_cpp)
+          target_link_libraries(smoke_cpp PRIVATE msvcprt.lib)
+          EOF
+          cmake --version | head -1
+          cmake -G Ninja -S "$RUNNER_TEMP/cm" -B "$RUNNER_TEMP/cm/build" \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/toolchain/vc9-cross-x86.cmake" -DVC9_ROOT="${{ steps.vc9.outputs.root }}"
+          cmake --build "$RUNNER_TEMP/cm/build"
+          for exe in smoke_c smoke_cpp; do
+            file "$RUNNER_TEMP/cm/build/$exe.exe" | grep -q "PE32 executable" || { echo "FAIL: $exe not PE32"; exit 1; }
+            objdump -p "$RUNNER_TEMP/cm/build/$exe.exe" | grep -qi "MSVCR90.dll" || { echo "FAIL: $exe has no MSVCR90.dll import"; exit 1; }
+          done
+
+  action-cache-hit:
+    name: 'Action: Linux, second run (cache hit)'
+    needs: action-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run the action
+        id: vc9
+        uses: ./
+
+      - name: Expect a cache hit
+        run: |
+          test "${{ steps.vc9.outputs.cache-hit }}" = true || { echo "::error::expected a cache hit"; exit 1; }
+          test -f "${{ steps.vc9.outputs.vc-dir }}/bin/cl.exe"
+
+  action-analyze-build-log:
+    name: 'Action: analyze-build-log'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Warnings only
+        id: warnings
+        uses: ./analyze-build-log
+        with:
+          logs: |
+            MSBuild=test/logs/msbuild-warnings.log
+            Missing=test/logs/does-not-exist.log
+
+      - name: Errors (must fail)
+        id: errors
+        continue-on-error: true
+        uses: ./analyze-build-log
+        with:
+          logs: Errors=test/logs/errors.log
+
+      - name: Check results
+        run: |
+          test "${{ steps.warnings.outcome }}" = success
+          test "${{ steps.errors.outcome }}" = failure
+          test "${{ steps.warnings.outputs.warnings }}/${{ steps.warnings.outputs.errors }}" = 4/0
+          test "${{ steps.errors.outputs.warnings }}/${{ steps.errors.outputs.errors }}" = 1/3
+          echo "analyze-build-log: counts and exit codes as expected"

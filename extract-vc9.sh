@@ -7,11 +7,12 @@
 # Usage:
 #   ./extract-vc9.sh [destination_dir]
 #   ./extract-vc9.sh --include-debug-crt [destination_dir]
+#   ./extract-vc9.sh --setup-dir=<dir> [destination_dir]   (use or fill a fetch-vc9.sh folder, e.g. a CI cache)
 #
 # Prerequisites:
 #   7z          — p7zip-full (Debian/Ubuntu), 7-zip (Windows), p7zip (macOS)
 #   msiextract  — msitools (Debian/Ubuntu), msitools (macOS Homebrew)
-#   wget or curl
+#   curl, sha256sum or shasum
 #
 # What gets extracted (~343 MB base):
 #   VC/bin/           VC9 SP1 compiler (cl.exe 15.0.30729.1), linker, assembler
@@ -36,25 +37,17 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# --- Configuration ---
-# Windows SDK 7.0 contains VC9 SP1 (15.0.30729.1) + Windows SDK 7.0 headers/libs
-# WARNING: archive.org/grmsdkx-en-dvd is SDK 7.1 (VC10) — do NOT use that.
-SDK70_URL="https://web.archive.org/web/20161230154527/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso"
-SDK70_SIZE=1552508928
-SDK70_NAME="GRMSDK_EN_DVD.iso"
-
-# VS2008 SP1 contains debug CRT add-ons (extracted from VC90sp1-KB947888 MSP)
-SP1_URL="https://download.microsoft.com/download/a/3/7/a371b6d1-fc5e-44f7-914c-cb452b4043a9/VS2008SP1ENUX1512962.iso"
-SP1_SIZE=871700480
-SP1_NAME="VS2008SP1ENUX1512962.iso"
-SP1_MSP="vs90sp1/VC90sp1-KB947888-x86-enu.msp"
+# fetch-vc9.sh downloads and verifies the ISOs (URLs, sizes, SHA-256 in downloads.txt)
+SP1_MSP_NAME="VC90sp1-KB947888-x86-enu.msp"
 
 # --- Parse arguments ---
 INCLUDE_DEBUG_CRT=0
 DEST=""
+SETUP_DIR=""
 for arg in "$@"; do
     case "$arg" in
         --include-debug-crt) INCLUDE_DEBUG_CRT=1 ;;
+        --setup-dir=*) SETUP_DIR="${arg#--setup-dir=}" ;;
         -*) echo "Unknown option: $arg" >&2; exit 1 ;;
         *) DEST="$arg" ;;
     esac
@@ -69,43 +62,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 check_prereqs() {
     command -v 7z >/dev/null 2>&1 || die "7z not found. Install: apt install p7zip-full (Debian/Ubuntu), brew install 7-zip (macOS)"
     command -v msiextract >/dev/null 2>&1 || die "msiextract not found. Install: apt install msitools (Debian/Ubuntu), brew install msitools (macOS)"
-    command -v wget >/dev/null 2>&1 || command -v curl >/dev/null 2>&1 || die "wget or curl required"
-}
-
-filesize() {
-    stat -L -c%s "$1" 2>/dev/null || stat -L -f%z "$1" 2>/dev/null
-}
-
-download_file() {
-    local url="$1" dest="$2" expected_size="$3" name
-    name=$(basename "$dest")
-
-    # Check next to script first
-    local local_file="$SCRIPT_DIR/$name"
-    if [ -f "$local_file" ] && [ "$(filesize "$local_file")" = "$expected_size" ]; then
-        echo "  Using local: $local_file"
-        ln -sf "$local_file" "$dest" 2>/dev/null || cp "$local_file" "$dest"
-        return 0
-    fi
-
-    # Check if already downloaded
-    if [ -f "$dest" ] && [ "$(filesize "$dest")" = "$expected_size" ]; then
-        echo "  Using cached: $dest"
-        return 0
-    fi
-
-    echo "  Downloading: $name ($(( expected_size / 1048576 )) MB)"
-    if command -v wget >/dev/null 2>&1; then
-        wget -q --show-progress -O "$dest" "$url" 2>&1 || wget -O "$dest" "$url"
-    else
-        curl -L --progress-bar -o "$dest" "$url"
-    fi
-
-    local size
-    size=$(filesize "$dest")
-    if [ "$size" != "$expected_size" ]; then
-        die "Download size mismatch for $name: got $size, expected $expected_size"
-    fi
+    command -v curl >/dev/null 2>&1 || die "curl required"
 }
 
 # --- Main ---
@@ -123,23 +80,20 @@ echo ""
 # ============================================
 echo "[1/3] Extracting VC9 SP1 + Windows SDK 7.0..."
 
-ISO_PATH="$TEMP_DIR/$SDK70_NAME"
-download_file "$SDK70_URL" "$ISO_PATH" "$SDK70_SIZE"
-
-echo "  Extracting ISO..."
-7z x "$ISO_PATH" -o"$TEMP_DIR/sdk7" -y > /dev/null || die "Failed to extract SDK ISO"
-rm -f "$ISO_PATH"
+# Download, verify and keep only the setup folders (skipped for what SETUP_DIR already has)
+[ -n "$SETUP_DIR" ] || SETUP_DIR="$TEMP_DIR/setup"
+FETCH_ARGS=()
+[ "$INCLUDE_DEBUG_CRT" -eq 1 ] && FETCH_ARGS+=(--include-debug-crt)
+bash "$SCRIPT_DIR/fetch-vc9.sh" "${FETCH_ARGS[@]}" "$SETUP_DIR" || die "Failed to fetch the VC9 SP1 setup files"
+SDK7_SETUP="$SETUP_DIR/sdk70/Setup"
 
 echo "  Extracting vc_stdx86.msi (compiler + headers + libs)..."
-msiextract "$TEMP_DIR/sdk7/Setup/vc_stdx86/vc_stdx86.msi" -C "$TEMP_DIR/vc9_raw" > /dev/null 2>&1 \
+msiextract "$SDK7_SETUP/vc_stdx86/vc_stdx86.msi" -C "$TEMP_DIR/vc9_raw" > /dev/null 2>&1 \
     || die "Failed to extract vc_stdx86.msi"
 
 echo "  Extracting WinSDKBuild_x86.msi (Windows SDK headers + libs)..."
-msiextract "$TEMP_DIR/sdk7/Setup/WinSDKBuild/WinSDKBuild_x86.msi" -C "$TEMP_DIR/winsdk_raw" > /dev/null 2>&1 \
+msiextract "$SDK7_SETUP/WinSDKBuild/WinSDKBuild_x86.msi" -C "$TEMP_DIR/winsdk_raw" > /dev/null 2>&1 \
     || die "Failed to extract WinSDKBuild_x86.msi"
-
-# Free extracted ISO space
-rm -rf "$TEMP_DIR/sdk7"
 
 # ============================================
 # Reorganize into clean layout
@@ -271,18 +225,9 @@ if [ "$INCLUDE_DEBUG_CRT" -eq 1 ]; then
     echo ""
     echo "[SP1] Extracting Debug CRT from VS2008 SP1..."
 
-    SP1_ISO="$TEMP_DIR/$SP1_NAME"
-    download_file "$SP1_URL" "$SP1_ISO" "$SP1_SIZE"
-
-    echo "  Extracting SP1 ISO..."
-    7z x "$SP1_ISO" -o"$TEMP_DIR/sp1iso" "$SP1_MSP" -y > /dev/null \
-        || die "Failed to extract SP1 ISO"
-    rm -f "$SP1_ISO"
-
     echo "  Extracting VC90 SP1 MSP (this may take a moment)..."
-    7z x "$TEMP_DIR/sp1iso/$SP1_MSP" -o"$TEMP_DIR/sp1msp" -y > /dev/null \
+    7z x "$SETUP_DIR/sp1/$SP1_MSP_NAME" -o"$TEMP_DIR/sp1msp" -y > /dev/null \
         || die "Failed to extract VC90 SP1 MSP"
-    rm -rf "$TEMP_DIR/sp1iso"
 
     MSP="$TEMP_DIR/sp1msp"
 

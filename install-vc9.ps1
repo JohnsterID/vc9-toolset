@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Install VC9 SP1 (VS2008 SP1) toolchain for Visual Studio 2010-2022
+    Install VC9 SP1 (VS2008 SP1) toolchain for Visual Studio 2010 and later
 
 .DESCRIPTION
     Downloads and installs:
-    1. VC9 SP1 compiler from Windows SDK 7.0
+    1. VC9 SP1 compiler, and the headers, libs, rc.exe and mt.exe of Windows SDK 7.0
     2. MSBuild v90 toolset (bundled in this repository)
 
     Optional add-ons from VS2008 SP1 (~832 MB download):
@@ -17,6 +17,10 @@
 
 .PARAMETER SP1IsoPath
     Path to an already-downloaded VS2008 SP1 ISO. Skips download if provided.
+
+.PARAMETER SetupDir
+    Folder made by fetch-vc9.sh (sdk70\Setup\..., sp1\*.msp). Installs from it instead of the ISOs;
+    used by the GitHub Action, which caches that folder.
 
 .PARAMETER IncludeDebugCRT
     Install debug CRT libs (msvcrtd.lib, libcmtd.lib, etc.) and debug DLLs
@@ -38,6 +42,7 @@
 param(
     [string]$IsoPath,
     [string]$SP1IsoPath,
+    [string]$SetupDir,
     [switch]$IncludeDebugCRT,
     [switch]$NoPrompt
 )
@@ -57,55 +62,58 @@ New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 Write-Host "=== VC9 SP1 Installer ===" -ForegroundColor Cyan
 Write-Host ""
 
-# File names, URLs, and sizes
-$SDK70_NAME = "GRMSDK_EN_DVD.iso"
-# NOTE: archive.org/grmsdkx-en-dvd is SDK 7.1 (VC10) — do NOT use that.
-# The correct SDK 7.0 ISO is ~1.48 GB (contains VC9 SP1 15.0.30729.1).
-$SDK70_URL = "https://web.archive.org/web/20161230154527/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso"
-$SDK70_SIZE = 1552508928  # ~1.48 GB
-
-# VS2008 SP1 ISO — contains debug CRT add-ons
-$SP1_NAME = "VS2008SP1ENUX1512962.iso"
-$SP1_URL = "https://download.microsoft.com/download/a/3/7/a371b6d1-fc5e-44f7-914c-cb452b4043a9/VS2008SP1ENUX1512962.iso"
-$SP1_SIZE = 871700480     # ~832 MB
+# File names, sizes, SHA-256 and URLs: downloads.txt (shared with fetch-vc9.sh)
+function Read-Download {
+    param([string]$Id)
+    $entry = @{ Name = $null; Size = 0; Sha256 = $null; Urls = @() }
+    foreach ($line in Get-Content (Join-Path $ScriptDir "downloads.txt")) {
+        $fields = -split $line
+        if ($fields.Count -lt 3 -or $fields[0].StartsWith("#") -or $fields[1] -ne $Id) { continue }
+        if ($fields[0] -eq "file") { $entry.Name = $fields[2]; $entry.Size = [long]$fields[3]; $entry.Sha256 = $fields[4] }
+        elseif ($fields[0] -eq "url") { $entry.Urls += $fields[2] }
+    }
+    if (-not $entry.Name -or $entry.Urls.Count -eq 0) { Write-Error "No entry for '$Id' in downloads.txt"; exit 1 }
+    return $entry
+}
+$sdk70 = Read-Download "sdk70"
+$SDK70_NAME = $sdk70.Name; $SDK70_SIZE = $sdk70.Size; $SDK70_SHA256 = $sdk70.Sha256; $SDK70_URLS = $sdk70.Urls
+$sp1 = Read-Download "sp1"
+$SP1_NAME = $sp1.Name; $SP1_SIZE = $sp1.Size; $SP1_SHA256 = $sp1.Sha256; $SP1_URLS = $sp1.Urls
 $SP1_MSP = "vs90sp1\VC90sp1-KB947888-x86-enu.msp"
 
+function Test-Iso {
+    param($Path, $ExpectedSize, $ExpectedHash)
+    if (-not (Test-Path $Path) -or (Get-Item $Path).Length -ne $ExpectedSize) { return $false }
+    return (Get-FileHash $Path -Algorithm SHA256).Hash -eq $ExpectedHash
+}
+
 function Get-OrDownload {
-    param($FileName, $Url, $ExpectedSize)
-    
-    # Check if file exists next to script
-    $localPath = Join-Path $ScriptDir $FileName
-    if (Test-Path $localPath) {
-        $size = (Get-Item $localPath).Length
-        if ($size -eq $ExpectedSize) {
-            Write-Host "  Using local: $FileName" -ForegroundColor Green
-            return $localPath
+    param($FileName, $Urls, $ExpectedSize, $ExpectedHash)
+
+    # Next to the script, then a previous download in the temp directory
+    foreach ($candidate in @((Join-Path $ScriptDir $FileName), (Join-Path $TempDir $FileName))) {
+        if (Test-Iso $candidate $ExpectedSize $ExpectedHash) {
+            Write-Host "  Using: $candidate" -ForegroundColor Green
+            return $candidate
         }
-        Write-Host "  Local $FileName wrong size, will download..." -ForegroundColor Yellow
     }
-    
-    # Check temp directory
+
     $tempPath = Join-Path $TempDir $FileName
-    if (Test-Path $tempPath) {
-        $size = (Get-Item $tempPath).Length
-        if ($size -eq $ExpectedSize) {
-            Write-Host "  Using cached: $tempPath" -ForegroundColor Gray
-            return $tempPath
+    foreach ($url in $Urls) {
+        Write-Host "  Downloading: $url"
+        Write-Host "  (This may take a while...)" -ForegroundColor Gray
+        # curl.exe ships with Windows 10+. It has no read timeout: --speed-limit/--speed-time abort a stalled
+        # transfer. --fail only catches HTTP errors, so the size and hash are checked too.
+        & curl.exe -L --fail --retry 2 --retry-all-errors --connect-timeout 60 --speed-limit 1024 --speed-time 120 --no-progress-meter -o $tempPath $url
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Download failed (curl exit $LASTEXITCODE): $url"
+            continue
         }
-        Write-Host "  Cached file incomplete, re-downloading..." -ForegroundColor Yellow
-        Remove-Item $tempPath
+        if (Test-Iso $tempPath $ExpectedSize $ExpectedHash) { return $tempPath }
+        Write-Warning "Wrong size or SHA-256 from $url"
     }
-    
-    # Download
-    Write-Host "  Downloading: $Url"
-    Write-Host "  (This may take a while...)" -ForegroundColor Gray
-    try {
-        Start-BitsTransfer -Source $Url -Destination $tempPath -DisplayName "Downloading $FileName"
-    } catch {
-        Write-Host "  BITS failed, using WebRequest..." -ForegroundColor Yellow
-        Invoke-WebRequest -Uri $Url -OutFile $tempPath -UseBasicParsing
-    }
-    return $tempPath
+    Write-Error "Could not download $FileName with the expected size and SHA-256"
+    exit 1
 }
 
 function Expand-IsoToPath {
@@ -137,27 +145,46 @@ function Expand-IsoToPath {
 # ============================================
 Write-Host "[1/4] Installing VC9 SP1 from Windows SDK 7.0..." -ForegroundColor Green
 
-if ($IsoPath -and (Test-Path $IsoPath)) {
+if ($SetupDir) {
+    # msiexec cannot open a package path with mixed separators (exit 1619), e.g. D:\a\_temp/vc9-setup from bash
+    $SetupDir = [System.IO.Path]::GetFullPath($SetupDir)
+    if (-not (Test-Path "$SetupDir\sdk70\.complete")) {
+        Write-Error "$SetupDir has no complete sdk70 folder. Run fetch-vc9.sh `"$SetupDir`" first."
+        exit 1
+    }
+    Write-Host "  Using setup files: $SetupDir\sdk70" -ForegroundColor Green
+    $sdkRoot = "$SetupDir\sdk70"
+    $is7zExtract = $true
+} elseif ($IsoPath -and (Test-Path $IsoPath)) {
     Write-Host "  Using provided ISO: $IsoPath" -ForegroundColor Green
     $SDK70_Path = $IsoPath
 } else {
-    $SDK70_Path = Get-OrDownload -FileName $SDK70_NAME -Url $SDK70_URL -ExpectedSize $SDK70_SIZE
+    $SDK70_Path = Get-OrDownload -FileName $SDK70_NAME -Urls $SDK70_URLS -ExpectedSize $SDK70_SIZE -ExpectedHash $SDK70_SHA256
 }
 
-$sdkRoot = Expand-IsoToPath $SDK70_Path
-$is7zExtract = Test-Path "$sdkRoot\Setup"  # 7z gives a dir; mount gives a drive letter
+if (-not $SetupDir) {
+    $sdkRoot = Expand-IsoToPath $SDK70_Path
+    $is7zExtract = Test-Path "$sdkRoot\Setup"  # 7z gives a dir; mount gives a drive letter
+}
 
 foreach ($msi in @(
     @{ Path = "$sdkRoot\Setup\vc_stdx86\vc_stdx86.msi";         Desc = "VC9 x86 compiler" }
     @{ Path = "$sdkRoot\Setup\vc_stdamd64\vc_stdamd64.msi";     Desc = "VC9 x64 cross-compiler" }
     @{ Path = "$sdkRoot\Setup\WinSDKBuild\WinSDKBuild_x86.msi"; Desc = "Windows SDK headers + libs" }
+    @{ Path = "$sdkRoot\Setup\WinSDKWin32Tools\WinSDKWin32Tools_x86.msi"; Desc = "Windows SDK rc.exe + mt.exe" }
 )) {
-    if (Test-Path $msi.Path) {
-        Write-Host "  Installing $($msi.Desc)..."
-        $p = Start-Process msiexec -ArgumentList "/i `"$($msi.Path)`" /qn" -Wait -PassThru
-        if ($p.ExitCode -ne 0) { Write-Warning "msiexec exit $($p.ExitCode) for $($msi.Desc)" }
-    } else {
-        Write-Warning "MSI not found: $($msi.Path)"
+    if (-not (Test-Path $msi.Path)) {
+        Write-Error "MSI not found: $($msi.Path)"
+        exit 1
+    }
+    Write-Host "  Installing $($msi.Desc)..."
+    $log = Join-Path $TempDir ((Split-Path $msi.Path -Leaf) + ".log")
+    $p = Start-Process msiexec -ArgumentList "/i `"$($msi.Path)`" /qn /norestart /l*v `"$log`"" -Wait -PassThru
+    # 0 = success, 3010 = success, restart required
+    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+        Get-Content $log -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" }
+        Write-Error "msiexec exit $($p.ExitCode) for $($msi.Desc) (log: $log)"
+        exit 1
     }
 }
 
@@ -279,10 +306,10 @@ foreach ($dir in $legacyDirs) {
     }
 }
 
-# VS2017+ (v150/v160/v170) — uses Toolset.props/Toolset.targets naming
+# VS2017+ (every MSBuild\Microsoft\VC\v* folder, v150 to v180): uses Toolset.props/Toolset.targets naming
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (Test-Path $vswhere) {
-    $vsInstalls = & $vswhere -all -property installationPath 2>$null
+    $vsInstalls = & $vswhere -all -products '*' -property installationPath 2>$null
     foreach ($vsPath in $vsInstalls) {
         $vcVersionDirs = Get-ChildItem "$vsPath\MSBuild\Microsoft\VC\v*" -Directory -ErrorAction SilentlyContinue
         foreach ($vcDir in $vcVersionDirs) {
@@ -298,7 +325,14 @@ if (Test-Path $vswhere) {
             #   layout vs v170's bin\Hostx86\x86\ layout)
             # - LinkCompiled: v170 CL task tracker normally sets this; VC9's cl.exe
             #   doesn't use the tracker, so we set it statically
+            # - TrackFileAccess=false: VC9's cl.exe cannot run under v170's file tracker
+            # - IncludePath/LibraryPath/ExecutablePath: the stock props only set these when empty, and
+            #   v170 has already filled them with the current toolset's paths, so set VC9 + SDK 7.0 here
+            #   (absolute: VCInstallDir is not defined yet); /p:UseEnv=true still takes them from the environment
+            # - WindowsSdkDir: the stock props read CurrentInstallFolder, which another SDK may own and which
+            #   needs a trailing backslash; set it last to the SDK 7.0 this script installed
             $binDir = "${VCInstallDir}bin"
+            $sdkDir = "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v7.0\"
             $propsContent = $propsContent -replace '(<PropertyGroup>)', @"
 `$1
     <_PlatformToolsetFound>true</_PlatformToolsetFound>
@@ -311,6 +345,44 @@ if (Test-Path $vswhere) {
     <LibToolPath>$binDir</LibToolPath>
     <LibToolExe>lib.exe</LibToolExe>
     <LinkCompiled>true</LinkCompiled>
+    <TrackFileAccess>false</TrackFileAccess>
+    <LegacyManifestEmbedding>true</LegacyManifestEmbedding>
+    <IncludePath Condition="'`$(UseEnv)' != 'true'">${VCInstallDir}include;${VCInstallDir}atlmfc\include;${sdkDir}Include</IncludePath>
+    <LibraryPath Condition="'`$(UseEnv)' != 'true'">${VCInstallDir}lib;${VCInstallDir}atlmfc\lib;${sdkDir}Lib</LibraryPath>
+    <ExecutablePath Condition="'`$(UseEnv)' != 'true'">$binDir;${sdkDir}Bin;${VSInstallDir}Common7\IDE;`$(PATH)</ExecutablePath>
+"@
+            # - LegacyManifestEmbedding: v170 embeds manifests with link /MANIFEST:EMBED, which VC9's link.exe
+            #   doesn't have; this restores the VS2010 way (mt.exe and a second link)
+            # - Microsoft.Cpp.Common.props: the ClCompile/Link/Lib item defaults (ProgramDataBaseFileName,
+            #   ObjectFileName, Link OutputFile, ...); v143 gets it through Microsoft.Cpp.MSVC.Toolset.Common.props.
+            #   The item defaults set before it are the VS2010 ones where v170 differs: the Win32 platform defaults
+            #   from VS2010's Microsoft.Cpp.Win32.props (Platform.Common.props would also add /SAFESEH), no /FC
+            #   (it puts full paths into __FILE__), and no /DEBUG unless the project asks for it
+            $propsContent = $propsContent -replace '\s*(</PropertyGroup>)', @"
+
+    <WindowsSdkDir Condition="'`$(UseEnv)' != 'true'">$sdkDir</WindowsSdkDir>
+  `$1
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <EnablePREfast Condition="'%(ClCompile.EnablePREfast)' == ''">false</EnablePREfast>
+      <OmitFramePointers Condition="'%(ClCompile.OmitFramePointers)' == ''">false</OmitFramePointers>
+      <DebugInformationFormat Condition="'%(ClCompile.DebugInformationFormat)' == '' and '`$(UseDebugLibraries)' == 'true'">EditAndContinue</DebugInformationFormat>
+      <UseFullPaths Condition="'%(ClCompile.UseFullPaths)' == ''">false</UseFullPaths>
+    </ClCompile>
+    <Link>
+      <TargetMachine Condition="'%(Link.TargetMachine)' == ''">MachineX86</TargetMachine>
+      <GenerateDebugInformation Condition="'%(Link.GenerateDebugInformation)' == ''">false</GenerateDebugInformation>
+    </Link>
+    <Lib>
+      <TargetMachine Condition="'%(Lib.TargetMachine)' == ''">MachineX86</TargetMachine>
+    </Lib>
+    <ImpLib>
+      <TargetMachine Condition="'%(ImpLib.TargetMachine)' == ''">MachineX86</TargetMachine>
+    </ImpLib>
+  </ItemDefinitionGroup>
+
+  <Import Project="`$(VCTargetsPath)\Microsoft.Cpp.Common.props" />
 "@
             $propsContent | Out-File "$toolsetDir\Toolset.props" -Encoding UTF8
 
@@ -323,15 +395,44 @@ if (Test-Path $vswhere) {
             $targetsContent = $targetsContent -replace 'ToolsVersion="4\.0"', ''
             # Insert CppCommon.targets import (same as v110–v143 toolsets).
             # CppCommon imports CppBuild.targets which defines Build/ClCompile/Link.
-            # Override DoLinkOutputFilesMatch: the v170 VCMessage for MSB8012 crashes
-            # with a FormatException when Link.OutputFile metadata is empty (v170 bug).
+            # The ItemDefinitionGroup turns off the switches newer than VC9's cl.exe and link.exe that v170/v180
+            # turn on by default (/JMC, /Zc:inline, /diagnostics:column, /external:W3, /DEBUG:FULL, /ILK,
+            # /LTCG:incremental) or that projects made with newer VS often set (/sdl, /permissive-, /std, ...),
+            # like Microsoft.Cpp.ClangCl.Exclusion.props does for clang-cl; being in the targets, it also applies
+            # when the project sets them.
             $targetsContent = $targetsContent -replace '</Project>', @"
 
-  <Import Project="`$(VCTargetsPath)\Microsoft.CppCommon.targets" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <SupportJustMyCode>false</SupportJustMyCode>
+      <RemoveUnreferencedCodeData>false</RemoveUnreferencedCodeData>
+      <DiagnosticsFormat />
+      <ExternalWarningLevel />
+      <ExternalTemplatesDiagnostics />
+      <TreatAngleIncludeAsExternal />
+      <SDLCheck />
+      <ConformanceMode />
+      <LanguageStandard />
+      <LanguageStandard_C />
+      <UseStandardPreprocessor />
+      <ControlFlowGuard />
+      <GuardEHContMetadata />
+      <SpectreMitigation />
+      <EnableASAN />
+      <IntelJCCErratum />
+      <EnableParallelCodeGeneration />
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation Condition="'%(Link.GenerateDebugInformation)' == 'DebugFull' or '%(Link.GenerateDebugInformation)' == 'DebugFastLink'">true</GenerateDebugInformation>
+      <LinkTimeCodeGeneration Condition="'%(Link.LinkTimeCodeGeneration)' == 'UseFastLinkTimeCodeGeneration'">UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <IncrementalLinkDatabaseFile />
+      <LinkTimeCodeGenerationObjectFile />
+      <CETCompat />
+      <LinkControlFlowGuard />
+    </Link>
+  </ItemDefinitionGroup>
 
-  <!-- Override v170's DoLinkOutputFilesMatch: its VCMessage MSB8012 crashes with
-       FormatException when Link.OutputFile is empty (no OutputFile metadata on v90) -->
-  <Target Name="DoLinkOutputFilesMatch" />
+  <Import Project="`$(VCTargetsPath)\Microsoft.CppCommon.targets" />
 </Project>
 "@
             $targetsContent | Out-File "$toolsetDir\Toolset.targets" -Encoding UTF8
@@ -348,33 +449,44 @@ if ($IncludeDebugCRT) {
     Write-Host ""
     Write-Host "[SP1] Installing Debug CRT from VS2008 SP1..." -ForegroundColor Green
 
-    # Download/locate SP1 ISO
-    if ($SP1IsoPath -and (Test-Path $SP1IsoPath)) {
-        Write-Host "  Using provided SP1 ISO: $SP1IsoPath" -ForegroundColor Green
-        $sp1Path = $SP1IsoPath
-    } else {
-        $sp1Path = Get-OrDownload -FileName $SP1_NAME -Url $SP1_URL -ExpectedSize $SP1_SIZE
-    }
-
-    # Extract SP1 ISO → get the VC90 SP1 MSP
-    $sp1ExtractDir = "$TempDir\sp1iso"
     $sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
     if (-not $sevenZip) {
         Write-Error "7z required for SP1 extraction. Install 7-Zip and ensure 7z is in PATH."
         exit 1
     }
-    Write-Host "  Extracting SP1 ISO..."
-    & 7z x $sp1Path -y -o"$sp1ExtractDir" $SP1_MSP | Out-Null
-    if (-not (Test-Path "$sp1ExtractDir\$SP1_MSP")) {
-        Write-Error "SP1 MSP not found after extraction: $sp1ExtractDir\$SP1_MSP"
-        exit 1
-    }
-
-    # Extract MSP → flat files with FL_ naming convention
     $mspDir = "$TempDir\sp1msp"
-    Write-Host "  Extracting VC90 SP1 MSP..."
-    & 7z x "$sp1ExtractDir\$SP1_MSP" -y -o"$mspDir" | Out-Null
-    Remove-Item -Recurse -Force $sp1ExtractDir
+    $setupMsp = if ($SetupDir) { Join-Path $SetupDir ("sp1\" + (Split-Path $SP1_MSP -Leaf)) }
+
+    if ($setupMsp) {
+        if (-not (Test-Path "$SetupDir\sp1\.complete")) {
+            Write-Error "$SetupDir has no complete sp1 folder. Run fetch-vc9.sh --include-debug-crt `"$SetupDir`" first."
+            exit 1
+        }
+        Write-Host "  Extracting VC90 SP1 MSP from $setupMsp..."
+        & 7z x $setupMsp -y -o"$mspDir" | Out-Null
+    } else {
+        # Download/locate SP1 ISO
+        if ($SP1IsoPath -and (Test-Path $SP1IsoPath)) {
+            Write-Host "  Using provided SP1 ISO: $SP1IsoPath" -ForegroundColor Green
+            $sp1Path = $SP1IsoPath
+        } else {
+            $sp1Path = Get-OrDownload -FileName $SP1_NAME -Urls $SP1_URLS -ExpectedSize $SP1_SIZE -ExpectedHash $SP1_SHA256
+        }
+
+        # Extract SP1 ISO -> get the VC90 SP1 MSP
+        $sp1ExtractDir = "$TempDir\sp1iso"
+        Write-Host "  Extracting SP1 ISO..."
+        & 7z x $sp1Path -y -o"$sp1ExtractDir" $SP1_MSP | Out-Null
+        if (-not (Test-Path "$sp1ExtractDir\$SP1_MSP")) {
+            Write-Error "SP1 MSP not found after extraction: $sp1ExtractDir\$SP1_MSP"
+            exit 1
+        }
+
+        # Extract MSP -> flat files with FL_ naming convention
+        Write-Host "  Extracting VC90 SP1 MSP..."
+        & 7z x "$sp1ExtractDir\$SP1_MSP" -y -o"$mspDir" | Out-Null
+        Remove-Item -Recurse -Force $sp1ExtractDir
+    }
 
     # Helper: copy FL_ named file to target
     function Copy-MspFile {
