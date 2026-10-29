@@ -2,7 +2,10 @@
 # fetch-vc9.sh — Download and verify the VC9 SP1 sources, keeping only the files the installers use
 #
 # Usage:
-#   ./fetch-vc9.sh [--include-debug-crt] <setup_dir>
+#   ./fetch-vc9.sh [--include-debug-crt] [--isos-only] <setup_dir>
+#
+# URLs, sizes and SHA-256 are in downloads.txt. --isos-only stops after downloading and verifying the ISOs
+# into <setup_dir>.
 #
 # Creates (skipping what is already there and complete):
 #   <setup_dir>/sdk70/Setup/vc_stdx86/      VC9 SP1 x86 compiler, CRT, headers, libs (MSI + cabs)
@@ -22,36 +25,42 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DOWNLOADS="$SCRIPT_DIR/downloads.txt"
 
-SDK70_NAME="GRMSDK_EN_DVD.iso"
-SDK70_SIZE=1552508928
-SDK70_SHA256="65739fb0874cc17ea6962d8ce7915364c7161fa106ed1bf1c917924c18ac63ca"
-# Microsoft no longer hosts it; two Wayback Machine captures of the same file.
-# WARNING: archive.org/grmsdkx-en-dvd is SDK 7.1 (VC10) — do NOT use that.
-SDK70_URLS=(
-    "https://web.archive.org/web/20161230154527/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso"
-    "https://web.archive.org/web/20130601064541/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso"
-)
+# read_download <id>: sets DL_NAME, DL_SIZE, DL_SHA256 and the DL_URLS array from downloads.txt
+read_download() {
+    local kind id a b c
+    DL_NAME="" DL_SIZE="" DL_SHA256="" DL_URLS=()
+    while read -r kind id a b c; do
+        [ "$id" = "$1" ] || continue
+        case "$kind" in
+            file) DL_NAME="$a" DL_SIZE="$b" DL_SHA256="$c" ;;
+            url) DL_URLS+=("$a") ;;
+        esac
+    done < <(tr -d '\r' < "$DOWNLOADS" | grep -v '^[[:space:]]*\(#\|$\)')
+    [ -n "$DL_NAME" ] && [ "${#DL_URLS[@]}" -gt 0 ] || { echo "ERROR: no entry for '$1' in $DOWNLOADS" >&2; exit 1; }
+}
+
+read_download sdk70
+SDK70_NAME="$DL_NAME" SDK70_SIZE="$DL_SIZE" SDK70_SHA256="$DL_SHA256" SDK70_URLS=("${DL_URLS[@]}")
 SDK70_FOLDERS=(vc_stdx86 vc_stdamd64 WinSDKBuild)
 
-SP1_NAME="VS2008SP1ENUX1512962.iso"
-SP1_SIZE=871700480
-SP1_SHA256="580f717269faa10cf668140ef0a1a264cec194e20a0083cb0d0004a897cc675e"
-SP1_URLS=(
-    "https://download.microsoft.com/download/a/3/7/a371b6d1-fc5e-44f7-914c-cb452b4043a9/VS2008SP1ENUX1512962.iso"
-)
+read_download sp1
+SP1_NAME="$DL_NAME" SP1_SIZE="$DL_SIZE" SP1_SHA256="$DL_SHA256" SP1_URLS=("${DL_URLS[@]}")
 SP1_MSP="vs90sp1/VC90sp1-KB947888-x86-enu.msp"
 
 INCLUDE_DEBUG_CRT=0
+ISOS_ONLY=0
 DEST=""
 for arg in "$@"; do
     case "$arg" in
         --include-debug-crt) INCLUDE_DEBUG_CRT=1 ;;
+        --isos-only) ISOS_ONLY=1 ;;
         -*) echo "Unknown option: $arg" >&2; exit 1 ;;
         *) DEST="$arg" ;;
     esac
 done
-[ -n "$DEST" ] || { echo "Usage: $0 [--include-debug-crt] <setup_dir>" >&2; exit 1; }
+[ -n "$DEST" ] || { echo "Usage: $0 [--include-debug-crt] [--isos-only] <setup_dir>" >&2; exit 1; }
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 filesize() { stat -L -c%s "$1" 2>/dev/null || stat -L -f%z "$1"; }
@@ -61,7 +70,7 @@ sha256() {
 }
 
 command -v curl >/dev/null 2>&1 || die "curl not found"
-command -v 7z >/dev/null 2>&1 || die "7z not found. Install: apt install p7zip-full (Debian/Ubuntu), brew install 7-zip (macOS)"
+[ "$ISOS_ONLY" = 1 ] || command -v 7z >/dev/null 2>&1 || die "7z not found. Install: apt install p7zip-full (Debian/Ubuntu), brew install 7-zip (macOS)"
 
 # fetch_iso <dest> <size> <sha256> <url>...
 fetch_iso() {
@@ -73,7 +82,8 @@ fetch_iso() {
         if [ -n "$candidate" ] && [ -f "$candidate" ] && [ "$(filesize "$candidate")" = "$size" ] \
                 && [ "$(sha256 "$candidate")" = "$hash" ]; then
             echo "  Using local: $candidate"
-            ln -sf "$candidate" "$dest" 2>/dev/null || cp "$candidate" "$dest"
+            # ln -sf onto the same file would replace the ISO with a symlink to itself
+            [ "$candidate" -ef "$dest" ] || ln -sf "$candidate" "$dest" 2>/dev/null || cp "$candidate" "$dest"
             return 0
         fi
     done
@@ -103,12 +113,20 @@ fetch_iso() {
 }
 
 mkdir -p "$DEST"
+
+# --isos-only: the verified ISOs themselves in <setup_dir> (for CI jobs that test extract-vc9.sh on the ISOs)
+if [ "$ISOS_ONLY" = 1 ]; then
+    fetch_iso "$DEST/$SDK70_NAME" "$SDK70_SIZE" "$SDK70_SHA256" "${SDK70_URLS[@]}"
+    [ "$INCLUDE_DEBUG_CRT" = 1 ] && fetch_iso "$DEST/$SP1_NAME" "$SP1_SIZE" "$SP1_SHA256" "${SP1_URLS[@]}"
+    exit 0
+fi
+
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 # A folder counts as complete only after its marker is written, so an interrupted run is redone
 SDK70_DIR="$DEST/sdk70"
-if [ -f "$SDK70_DIR/.complete" ]; then
+if [ "$(cat "$SDK70_DIR/.complete" 2>/dev/null)" = "$SDK70_SHA256" ]; then
     echo "SDK 7.0 setup files: already in $SDK70_DIR"
 else
     echo "SDK 7.0 setup files -> $SDK70_DIR"
@@ -127,7 +145,7 @@ fi
 
 if [ "$INCLUDE_DEBUG_CRT" = 1 ]; then
     SP1_DIR="$DEST/sp1"
-    if [ -f "$SP1_DIR/.complete" ]; then
+    if [ "$(cat "$SP1_DIR/.complete" 2>/dev/null)" = "$SP1_SHA256" ]; then
         echo "VS2008 SP1 debug CRT patch: already in $SP1_DIR"
     else
         echo "VS2008 SP1 debug CRT patch -> $SP1_DIR"

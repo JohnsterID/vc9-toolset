@@ -62,23 +62,23 @@ New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 Write-Host "=== VC9 SP1 Installer ===" -ForegroundColor Cyan
 Write-Host ""
 
-# File names, URLs, and sizes
-$SDK70_NAME = "GRMSDK_EN_DVD.iso"
-# NOTE: archive.org/grmsdkx-en-dvd is SDK 7.1 (VC10) — do NOT use that.
-# The correct SDK 7.0 ISO is ~1.48 GB (contains VC9 SP1 15.0.30729.1).
-# Microsoft no longer hosts it; two Wayback Machine captures of the same file
-$SDK70_URLS = @(
-    "https://web.archive.org/web/20161230154527/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso",
-    "https://web.archive.org/web/20130601064541/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso"
-)
-$SDK70_SIZE = 1552508928  # ~1.48 GB
-$SDK70_SHA256 = "65739FB0874CC17EA6962D8CE7915364C7161FA106ED1BF1C917924C18AC63CA"
-
-# VS2008 SP1 ISO — contains debug CRT add-ons
-$SP1_NAME = "VS2008SP1ENUX1512962.iso"
-$SP1_URLS = @("https://download.microsoft.com/download/a/3/7/a371b6d1-fc5e-44f7-914c-cb452b4043a9/VS2008SP1ENUX1512962.iso")
-$SP1_SIZE = 871700480     # ~832 MB
-$SP1_SHA256 = "580F717269FAA10CF668140EF0A1A264CEC194E20A0083CB0D0004A897CC675E"
+# File names, sizes, SHA-256 and URLs: downloads.txt (shared with fetch-vc9.sh)
+function Read-Download {
+    param([string]$Id)
+    $entry = @{ Name = $null; Size = 0; Sha256 = $null; Urls = @() }
+    foreach ($line in Get-Content (Join-Path $ScriptDir "downloads.txt")) {
+        $fields = -split $line
+        if ($fields.Count -lt 3 -or $fields[0].StartsWith("#") -or $fields[1] -ne $Id) { continue }
+        if ($fields[0] -eq "file") { $entry.Name = $fields[2]; $entry.Size = [long]$fields[3]; $entry.Sha256 = $fields[4] }
+        elseif ($fields[0] -eq "url") { $entry.Urls += $fields[2] }
+    }
+    if (-not $entry.Name -or $entry.Urls.Count -eq 0) { Write-Error "No entry for '$Id' in downloads.txt"; exit 1 }
+    return $entry
+}
+$sdk70 = Read-Download "sdk70"
+$SDK70_NAME = $sdk70.Name; $SDK70_SIZE = $sdk70.Size; $SDK70_SHA256 = $sdk70.Sha256; $SDK70_URLS = $sdk70.Urls
+$sp1 = Read-Download "sp1"
+$SP1_NAME = $sp1.Name; $SP1_SIZE = $sp1.Size; $SP1_SHA256 = $sp1.Sha256; $SP1_URLS = $sp1.Urls
 $SP1_MSP = "vs90sp1\VC90sp1-KB947888-x86-enu.msp"
 
 function Test-Iso {
