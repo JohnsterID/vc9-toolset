@@ -84,7 +84,7 @@ runs:
         if (-not (Test-Path "$root\VC\bin\cl.exe")) { throw "cl.exe not found in $root\VC\bin" }
         # The v90 toolset files set the VC9 and SDK paths themselves, so this MSBuild needs no vcvars32.bat
         $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-        $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+        $msbuild = & $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
         if (-not $msbuild) { throw "MSBuild.exe not found with vswhere" }
         "root=$root", "vc-dir=$root\VC", "sdk-dir=${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v7.0",
             "cmake-module=$env:GITHUB_ACTION_PATH\vc9-toolset.cmake", "msbuild=$msbuild" | Add-Content $env:GITHUB_OUTPUT

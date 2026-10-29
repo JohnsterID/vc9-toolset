@@ -309,7 +309,7 @@ foreach ($dir in $legacyDirs) {
 # VS2017+ (v150/v160/v170) — uses Toolset.props/Toolset.targets naming
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (Test-Path $vswhere) {
-    $vsInstalls = & $vswhere -all -property installationPath 2>$null
+    $vsInstalls = & $vswhere -all -products '*' -property installationPath 2>$null
     foreach ($vsPath in $vsInstalls) {
         $vcVersionDirs = Get-ChildItem "$vsPath\MSBuild\Microsoft\VC\v*" -Directory -ErrorAction SilentlyContinue
         foreach ($vcDir in $vcVersionDirs) {
