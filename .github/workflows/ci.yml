@@ -1321,7 +1321,7 @@ jobs:
           fi
           echo "Ninja x64 build PASSED"
 
-  # ── GitHub Action (action.yml) ─────────────────────────────────────
+  # -- GitHub Action (action.yml) -------------------------------------
   action-windows:
     name: 'Action: Windows (MSBuild v90, debug CRT, ${{ matrix.os }})'
     strategy:

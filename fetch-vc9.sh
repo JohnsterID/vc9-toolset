@@ -1,5 +1,5 @@
 #!/bin/bash
-# fetch-vc9.sh — Download and verify the VC9 SP1 sources, keeping only the files the installers use
+# fetch-vc9.sh - Download and verify the VC9 SP1 sources, keeping only the files the installers use
 #
 # Usage:
 #   ./fetch-vc9.sh [--include-debug-crt] [--isos-only] <setup_dir>
