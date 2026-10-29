@@ -270,7 +270,9 @@ configure, then caches the result. Subsequent configures skip extraction.
 Cross-compile Windows PE32 binaries from Linux using `clang` + `lld-link` with the
 extracted VC9 headers and libs.
 
-**Prerequisites:** `clang`, `lld` (e.g. `apt install clang-19 lld-19`)
+**Prerequisites:** `clang`, `lld`, and for CMake builds `llvm-rc` from LLVM's tools (e.g. `apt install clang lld llvm`;
+since Ubuntu 26.04 the clang package no longer pulls in `llvm`, and CMake's Windows-Clang module needs a resource
+compiler)
 
 #### Quick start (command line)
 
