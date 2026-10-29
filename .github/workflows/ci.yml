@@ -295,6 +295,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.full_build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
+      # The other jobs restore these by key and extract-vc9.sh checks size and SHA-256 again before use
       - name: Cache SDK 7.0 ISO
         id: cache-iso
         uses: actions/cache@v6
@@ -302,18 +305,6 @@ jobs:
           path: GRMSDK_EN_DVD.iso
           key: sdk70-iso-1552508928
           enableCrossOsArchive: true
-
-      - name: Download SDK 7.0 ISO
-        if: steps.cache-iso.outputs.cache-hit != 'true'
-        run: >-
-          wget -q --show-progress -O GRMSDK_EN_DVD.iso
-          "https://web.archive.org/web/20161230154527/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso"
-
-      - name: Verify ISO size
-        run: |
-          size=$(stat -c%s GRMSDK_EN_DVD.iso)
-          echo "ISO size: $size (expected 1552508928)"
-          [ "$size" = "1552508928" ] || { echo "SIZE MISMATCH"; exit 1; }
 
       - name: Cache VS2008 SP1 ISO
         id: cache-sp1
@@ -323,17 +314,9 @@ jobs:
           key: vs2008sp1-iso-871700480
           enableCrossOsArchive: true
 
-      - name: Download VS2008 SP1 ISO
-        if: steps.cache-sp1.outputs.cache-hit != 'true'
-        run: >-
-          wget -q --show-progress -O VS2008SP1ENUX1512962.iso
-          "https://download.microsoft.com/download/a/3/7/a371b6d1-fc5e-44f7-914c-cb452b4043a9/VS2008SP1ENUX1512962.iso"
-
-      - name: Verify SP1 ISO size
-        run: |
-          size=$(stat -c%s VS2008SP1ENUX1512962.iso)
-          echo "SP1 ISO size: $size (expected 871700480)"
-          [ "$size" = "871700480" ] || { echo "SP1 SIZE MISMATCH"; exit 1; }
+      - name: Download and verify the ISOs (downloads.txt)
+        if: steps.cache-iso.outputs.cache-hit != 'true' || steps.cache-sp1.outputs.cache-hit != 'true'
+        run: ./fetch-vc9.sh --include-debug-crt --isos-only .
 
   # ── Linux: extract + cross-compile x86 (/MD + /MT) ────────────────
   linux-cross-compile-x86:
@@ -345,7 +328,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y p7zip-full msitools clang lld
+          sudo apt-get install -y p7zip-full msitools clang lld llvm
 
       - name: Restore cached ISO
         uses: actions/cache@v6
@@ -612,7 +595,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y p7zip-full msitools clang lld
+          sudo apt-get install -y p7zip-full msitools clang lld llvm
 
       - name: Restore cached SDK 7.0 ISO
         uses: actions/cache@v6
@@ -814,7 +797,8 @@ jobs:
       - name: 'Verify PE: dumpbin /dependents + /headers'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           echo === smoke_c.exe dependents ===
           dumpbin /dependents smoke_c.exe
           echo.
@@ -961,7 +945,8 @@ jobs:
       - name: 'Verify PE: /MDd links to MSVCR90D.dll'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           dumpbin /dependents smoke_mdd.exe | findstr /i "MSVCR90D" >nul
           if errorlevel 1 (
             echo FAIL: smoke_mdd.exe does not depend on MSVCR90D.dll
@@ -1004,7 +989,8 @@ jobs:
       - name: 'MSBuild: build smoke.vcxproj /p:PlatformToolset=v90'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
           set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
           set "INCLUDE=%VCDir%\include;%SDKDir%Include"
@@ -1033,7 +1019,8 @@ jobs:
       - name: 'Verify PE: dumpbin /dependents + /headers (MSBuild output)'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           for /f "tokens=*" %%f in ('dir /s /b test\*.exe 2^>nul') do (
             echo === %%f dependents ===
             dumpbin /dependents "%%f"
@@ -1118,7 +1105,8 @@ jobs:
       - name: 'Verify PE: dumpbin /dependents + /headers (clang-cl)'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           echo === smoke_c_clang.exe ===
           dumpbin /dependents smoke_c_clang.exe
           dumpbin /headers smoke_c_clang.exe | findstr /i "linker version machine"
@@ -1171,7 +1159,8 @@ jobs:
       - name: 'Verify PE: probe_cpp23.exe depends on MSVCR90.dll'
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
           dumpbin /dependents probe_cpp23.exe
           dumpbin /dependents probe_cpp23.exe | findstr /i "MSVCR90" >nul
           if errorlevel 1 (
@@ -1198,7 +1187,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y p7zip-full msitools clang lld
+          sudo apt-get install -y p7zip-full msitools clang lld llvm
 
       - name: Restore cached ISO
         uses: actions/cache@v6
@@ -1334,8 +1323,12 @@ jobs:
 
   # ── GitHub Action (action.yml) ─────────────────────────────────────
   action-windows:
-    name: 'Action: Windows (MSBuild v90, debug CRT)'
-    runs-on: windows-latest
+    name: 'Action: Windows (MSBuild v90, debug CRT, ${{ matrix.os }})'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
@@ -1390,8 +1383,12 @@ jobs:
           Write-Host "OK: v90 paths are VC9 + SDK 7.0"
 
   action-linux:
-    name: 'Action: Linux (clang cross-build)'
-    runs-on: ubuntu-latest
+    name: 'Action: Linux (clang cross-build, ${{ matrix.os }})'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
@@ -1411,7 +1408,7 @@ jobs:
 
       - name: 'Clang cross-compile and lld-link: smoke.cpp'
         run: |
-          sudo apt-get install -y -qq clang lld
+          sudo apt-get install -y -qq clang lld llvm
           VC9="${{ steps.vc9.outputs.root }}"
           clang++ --target=i686-pc-windows-msvc -fms-compatibility -fms-extensions -fdelayed-template-parsing \
             -include compat/vc9_compat.h -U_MSC_VER -D_MSC_VER=1500 \
@@ -1423,6 +1420,30 @@ jobs:
             /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
             "$RUNNER_TEMP/smoke.obj" "$RUNNER_TEMP/stubs.obj" msvcrt.lib msvcprt.lib kernel32.lib
           file "$RUNNER_TEMP/smoke.exe" | grep -q "PE32 executable"
+
+      - name: 'CMake toolchain (vc9-cross-x86.cmake) + vc9_target_setup: smoke.c, smoke.cpp'
+        run: |
+          sudo apt-get install -y -qq ninja-build
+          mkdir -p "$RUNNER_TEMP/cm"
+          cat > "$RUNNER_TEMP/cm/CMakeLists.txt" << EOF
+          cmake_minimum_required(VERSION 3.19)
+          project(action_smoke C CXX)
+          include("${{ steps.vc9.outputs.cmake-module }}")
+          vc9_setup("${{ steps.vc9.outputs.root }}")
+          add_executable(smoke_c "$GITHUB_WORKSPACE/test/smoke.c")
+          vc9_target_setup(smoke_c)
+          add_executable(smoke_cpp "$GITHUB_WORKSPACE/test/smoke.cpp" "\${VC9_RUNTIME_STUBS_SRC}")
+          vc9_target_setup(smoke_cpp)
+          target_link_libraries(smoke_cpp PRIVATE msvcprt.lib)
+          EOF
+          cmake --version | head -1
+          cmake -G Ninja -S "$RUNNER_TEMP/cm" -B "$RUNNER_TEMP/cm/build" \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/toolchain/vc9-cross-x86.cmake" -DVC9_ROOT="${{ steps.vc9.outputs.root }}"
+          cmake --build "$RUNNER_TEMP/cm/build"
+          for exe in smoke_c smoke_cpp; do
+            file "$RUNNER_TEMP/cm/build/$exe.exe" | grep -q "PE32 executable" || { echo "FAIL: $exe not PE32"; exit 1; }
+            objdump -p "$RUNNER_TEMP/cm/build/$exe.exe" | grep -qi "MSVCR90.dll" || { echo "FAIL: $exe has no MSVCR90.dll import"; exit 1; }
+          done
 
   action-cache-hit:
     name: 'Action: Linux, second run (cache hit)'
