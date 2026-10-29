@@ -11,6 +11,7 @@
 #   <setup_dir>/sdk70/Setup/vc_stdx86/      VC9 SP1 x86 compiler, CRT, headers, libs (MSI + cabs)
 #   <setup_dir>/sdk70/Setup/vc_stdamd64/    VC9 SP1 x64 cross-compiler
 #   <setup_dir>/sdk70/Setup/WinSDKBuild/    Windows SDK 7.0 headers + libs
+#   <setup_dir>/sdk70/Setup/WinSDKWin32Tools/  Windows SDK 7.0 rc.exe and mt.exe (resources, manifests)
 #   <setup_dir>/sp1/VC90sp1-KB947888-x86-enu.msp   (--include-debug-crt) debug CRT patch from VS2008 SP1
 #
 # install-vc9.ps1 -SetupDir and extract-vc9.sh --setup-dir install or extract from this folder, so it can be
@@ -43,7 +44,7 @@ read_download() {
 
 read_download sdk70
 SDK70_NAME="$DL_NAME" SDK70_SIZE="$DL_SIZE" SDK70_SHA256="$DL_SHA256" SDK70_URLS=("${DL_URLS[@]}")
-SDK70_FOLDERS=(vc_stdx86 vc_stdamd64 WinSDKBuild)
+SDK70_FOLDERS=(vc_stdx86 vc_stdamd64 WinSDKBuild WinSDKWin32Tools)
 
 read_download sp1
 SP1_NAME="$DL_NAME" SP1_SIZE="$DL_SIZE" SP1_SHA256="$DL_SHA256" SP1_URLS=("${DL_URLS[@]}")
@@ -125,8 +126,10 @@ TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 # A folder counts as complete only after its marker is written, so an interrupted run is redone
+# The marker records the ISO hash and the kept folders, so a change to either redoes the folder
+SDK70_MARKER="$SDK70_SHA256 ${SDK70_FOLDERS[*]}"
 SDK70_DIR="$DEST/sdk70"
-if [ "$(cat "$SDK70_DIR/.complete" 2>/dev/null)" = "$SDK70_SHA256" ]; then
+if [ "$(cat "$SDK70_DIR/.complete" 2>/dev/null)" = "$SDK70_MARKER" ]; then
     echo "SDK 7.0 setup files: already in $SDK70_DIR"
 else
     echo "SDK 7.0 setup files -> $SDK70_DIR"
@@ -139,7 +142,7 @@ else
     for f in "${SDK70_FOLDERS[@]}"; do
         ls "$SDK70_DIR/Setup/$f/"*.msi > /dev/null 2>&1 || die "Setup/$f has no MSI after extraction"
     done
-    echo "$SDK70_SHA256" > "$SDK70_DIR/.complete"
+    echo "$SDK70_MARKER" > "$SDK70_DIR/.complete"
     echo "  $(du -sm "$SDK70_DIR" | cut -f1) MB"
 fi
 

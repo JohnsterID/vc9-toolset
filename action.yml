@@ -47,7 +47,7 @@ runs:
       run: |
         echo "setup-dir=$RUNNER_TEMP/vc9-setup" >> "$GITHUB_OUTPUT"
         # Bump the version when fetch-vc9.sh changes what it keeps
-        key="vc9-setup-v1-${RUNNER_OS}-sdk70"
+        key="vc9-setup-v2-${RUNNER_OS}-sdk70"
         [ "$DEBUG_CRT" = true ] && key="$key-sp1"
         echo "key=$key" >> "$GITHUB_OUTPUT"
 

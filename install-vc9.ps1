@@ -171,6 +171,7 @@ foreach ($msi in @(
     @{ Path = "$sdkRoot\Setup\vc_stdx86\vc_stdx86.msi";         Desc = "VC9 x86 compiler" }
     @{ Path = "$sdkRoot\Setup\vc_stdamd64\vc_stdamd64.msi";     Desc = "VC9 x64 cross-compiler" }
     @{ Path = "$sdkRoot\Setup\WinSDKBuild\WinSDKBuild_x86.msi"; Desc = "Windows SDK headers + libs" }
+    @{ Path = "$sdkRoot\Setup\WinSDKWin32Tools\WinSDKWin32Tools_x86.msi"; Desc = "Windows SDK rc.exe + mt.exe" }
 )) {
     if (-not (Test-Path $msi.Path)) {
         Write-Error "MSI not found: $($msi.Path)"

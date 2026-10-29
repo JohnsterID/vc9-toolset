@@ -11,7 +11,8 @@ Installs Visual C++ 2008 SP1 (`PlatformToolset=v90`) for use with Visual Studio 
 
 ## What It Does
 
-1. Downloads **Windows SDK 7.0** and installs VC9 SP1 compiler (15.0.30729.1)
+1. Downloads **Windows SDK 7.0** and installs VC9 SP1 compiler (15.0.30729.1), the SDK headers and libraries, and
+   the SDK's `rc.exe` and `mt.exe` (so resources and manifests don't depend on a newer SDK on `PATH`)
 2. Installs MSBuild v90 toolset files (bundled in this repository)
 3. Sets up registry keys and environment for MSBuild (works with all VS versions)
 
