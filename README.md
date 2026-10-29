@@ -1,6 +1,6 @@
 # VC9 SP1 Installer
 
-Installs Visual C++ 2008 SP1 (`PlatformToolset=v90`) for use with Visual Studio 2010-2022.
+Installs Visual C++ 2008 SP1 (`PlatformToolset=v90`) for use with Visual Studio 2010 and later.
 
 ## Quick Start
 
@@ -12,8 +12,10 @@ Installs Visual C++ 2008 SP1 (`PlatformToolset=v90`) for use with Visual Studio 
 ## What It Does
 
 1. Downloads **Windows SDK 7.0** and installs VC9 SP1 compiler (15.0.30729.1), the SDK headers and libraries, and
-   the SDK's `rc.exe` and `mt.exe` (so resources and manifests don't depend on a newer SDK on `PATH`)
-2. Installs MSBuild v90 toolset files (bundled in this repository)
+   the SDK's `rc.exe` and `mt.exe`
+2. Installs MSBuild v90 toolset files (bundled in this repository). For VS2017 and later they put SDK 7.0's `Bin`
+   ahead of `PATH`, so resources and manifests don't use a newer SDK's `rc.exe` and `mt.exe`; with
+   `/p:UseEnv=true` MSBuild takes the tools from `PATH`, so put SDK 7.0's `Bin` first there
 3. Sets up registry keys and environment for MSBuild (works with all VS versions)
 
 ## GitHub Action
@@ -24,6 +26,12 @@ Installs Visual C++ 2008 SP1 (`PlatformToolset=v90`) for use with Visual Studio 
   with:
     debug-crt: false   # true: also the debug CRT (/MDd, /MTd) from VS2008 SP1
 ```
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `debug-crt` | `false` | `true`: also install the debug CRT (`/MDd`, `/MTd`) from the VS2008 SP1 ISO (832 MB more to download) |
+| `cache` | `true` | cache the verified setup files with `actions/cache`, so later runs skip the downloads |
+| `destination` | `$RUNNER_TEMP/vc9sp1` | Linux/macOS only: where to extract the toolchain |
 
 - **Windows runners:** installs VC9 SP1 and the MSBuild v90 toolset files, so `msbuild /p:PlatformToolset=v90`
   works (see the `action-windows` job in `.github/workflows/ci.yml` for a complete build step).
@@ -56,6 +64,15 @@ runs do not download the 1.48 GB ISO again.
       MSVC Release=msvc_release_msbuild.log
 ```
 
+| Input | Description |
+|-------|-------------|
+| `logs` (required) | one `Label=path/to/build.log` per line; a missing log is reported as "not run" |
+
+| Output | Description |
+|--------|-------------|
+| `warnings` | distinct warnings in all logs |
+| `errors` | distinct errors in all logs |
+
 Annotates every warning and error in MSBuild and Clang logs, including the ones without a file and line
 (`LINK : fatal error LNK1104`, `EXEC : warning`, `lld-link: warning`) and `fatal error` lines, counts each once
 (MSBuild repeats them in its summary, and the v90 toolset links twice when it embeds a manifest), writes a table to
@@ -67,7 +84,8 @@ Outside GitHub Actions, `fetch-vc9.sh <dir>` downloads and verifies the same set
 ## Requirements
 
 - Windows 10/11
-- Visual Studio 2010 or later (any edition)
+- Visual Studio 2010 or later (any edition, including Build Tools); CI builds with VS 2022 and VS 2026 (MSBuild 17
+  and 18), earlier versions are untested
 - PowerShell 5.1+
 - [7-Zip](https://www.7-zip.org/) in PATH (required on headless/Server; desktop falls back to Mount-DiskImage)
 - ~1.5 GB free disk space for download (can be cleaned up after)
@@ -122,8 +140,8 @@ C:\Program Files (x86)\MSBuild\Microsoft.Cpp\v4.0\Platforms\Win32\PlatformToolse
 ├── Microsoft.Cpp.Win32.v90.props
 └── Microsoft.Cpp.Win32.v90.targets
 
-# VS2017+ (per-install, found via vswhere):
-<VS Install>\MSBuild\Microsoft\VC\v170\Platforms\Win32\PlatformToolsets\v90\
+# VS2017+ (per install, found via vswhere; every VC\v* folder, v150 to v180):
+<VS Install>\MSBuild\Microsoft\VC\v*\Platforms\Win32\PlatformToolsets\v90\
 ├── Toolset.props            # Generated with v170-specific properties
 └── Toolset.targets          # Generated with CppCommon.targets import
 ```
@@ -167,7 +185,10 @@ ships release CRT only.  The SP1 ISO contains a `.msp` patch with the debug libs
 **MSBuild v90 toolset files** are the stock `.props` and `.targets` from Visual
 Studio 2010 (byte-identical to the originals in `vs_setup.cab`, dated 2009-11-11).
 These enable MSBuild to locate the VC9 compiler via registry keys when a project
-sets `<PlatformToolset>v90</PlatformToolset>`.
+sets `<PlatformToolset>v90</PlatformToolset>`. For VS2017 and later, `install-vc9.ps1`
+generates `Toolset.props` and `Toolset.targets` from them, which set the VC9 and SDK 7.0
+paths directly (no `vcvars32.bat` needed) and turn off the compiler and linker switches
+that are newer than VC9.
 
 ⚠️ **Warning**: The [archive.org GRMSDK**X** item](https://archive.org/download/grmsdkx-en-dvd/GRMSDK_EN_DVD.iso) is SDK **7.1** (VC**10**/cl 16.0, 568 MB) — do **not** use it. The correct SDK 7.0 ISO is 1.48 GB from the Wayback Machine URL above.
 
@@ -317,17 +338,14 @@ lld-link /OUT:myapp.exe /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
 
 #### CMake toolchain file
 
-```cmake
-# toolchain-clang-vc9.cmake
-set(CMAKE_SYSTEM_NAME Windows)
-set(CMAKE_C_COMPILER clang)
-set(CMAKE_CXX_COMPILER clang++)
-set(CMAKE_C_COMPILER_TARGET i686-pc-windows-msvc)
-set(CMAKE_CXX_COMPILER_TARGET i686-pc-windows-msvc)
-set(CMAKE_LINKER lld-link)
+`toolchain/vc9-cross-x86.cmake` (Win32) and `toolchain/vc9-cross-x64.cmake` (x64) set clang, `lld-link`,
+`llvm-rc` and the VC9 library paths; `vc9_setup()` and `vc9_target_setup(<target>)` from `vc9-toolset.cmake` add
+the include paths, flags and CRT libraries (see the `action-linux` job in `.github/workflows/ci.yml`):
 
-# cmake -DCMAKE_TOOLCHAIN_FILE=toolchain-clang-vc9.cmake \
-#        -DVC9_ROOT=/path/to/vc9sp1 ..
+```bash
+cmake -G Ninja -B build \
+  -DCMAKE_TOOLCHAIN_FILE=/path/to/vc9-toolset/toolchain/vc9-cross-x86.cmake \
+  -DVC9_ROOT=/path/to/vc9sp1
 ```
 
 ### C++ standard support
@@ -453,6 +471,13 @@ cl.exe handles `_DLL`/`_MT`/`_DEBUG` automatically:
 Projects needing specific STL ABI settings (e.g. `_SECURE_SCL=0`,
 `_HAS_ITERATOR_DEBUGGING=0`) should define those in their own headers —
 they are project-specific, not toolchain-universal.
+
+## License
+
+GPL-3.0 (see `LICENSE`). The two files in `MSBuild/v90/` are Microsoft's unmodified Visual Studio 2010 toolset
+files (copyright Microsoft Corporation, see their headers) and are not covered by that license. The VC9 and SDK 7.0
+files themselves are not in this repository; the scripts download them from Microsoft's URLs (or the Wayback
+Machine's capture of them).
 
 ## See Also
 
