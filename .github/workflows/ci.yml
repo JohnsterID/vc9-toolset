@@ -1349,13 +1349,14 @@ jobs:
           }
           if ($env:VC9_ROOT -ne "${{ steps.vc9.outputs.root }}") { throw "VC9_ROOT not exported" }
 
-      - name: 'MSBuild: build smoke.vcxproj /p:PlatformToolset=v90 (no environment setup)'
+      - name: 'MSBuild: build smoke.vcxproj /p:PlatformToolset=v90 (outputs.msbuild, no vcvars32.bat)'
         shell: cmd
+        env:
+          MSBUILD: ${{ steps.vc9.outputs.msbuild }}
         run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
-          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
+          if not exist "%MSBUILD%" (echo FAIL: outputs.msbuild "%MSBUILD%" does not exist & exit /b 1)
           for %%c in (Debug Release) do (
-            msbuild test\smoke.vcxproj /p:Configuration=%%c /p:Platform=Win32 /p:PlatformToolset=v90 /v:normal > msbuild-%%c.log
+            "%MSBUILD%" test\smoke.vcxproj /p:Configuration=%%c /p:Platform=Win32 /p:PlatformToolset=v90 /v:normal > msbuild-%%c.log
             if errorlevel 1 (type msbuild-%%c.log & echo FAIL: %%c build & exit /b 1)
             type msbuild-%%c.log
             findstr /i /c:"Microsoft Visual Studio 9.0\VC\bin\cl.exe" msbuild-%%c.log >nul || (echo FAIL: %%c did not use VC9's cl.exe & exit /b 1)
@@ -1365,9 +1366,9 @@ jobs:
             findstr /c:" /Oy- " msbuild-%%c.log >nul || (echo FAIL: %%c has no /Oy- & exit /b 1)
           )
           rem The CL task passes IncludePath through the environment, so the next step checks the evaluated properties
-          msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 -getProperty:IncludePath -getProperty:LibraryPath -getProperty:WindowsSdkDir > props.json
+          "%MSBUILD%" test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 -getProperty:IncludePath -getProperty:LibraryPath -getProperty:WindowsSdkDir > props.json
           for /f "tokens=*" %%f in ('dir /s /b test\*.exe') do (
-            dumpbin /headers "%%f" | findstr /c:"9.00 linker version" || (echo FAIL: %%f is not linked by VC9 & exit /b 1)
+            "%VC9_ROOT%\VC\bin\link.exe" /dump /headers "%%f" | findstr /c:"9.00 linker version" || (echo FAIL: %%f is not linked by VC9 & exit /b 1)
             "%%f" || exit /b 1
           )
 

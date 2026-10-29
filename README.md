@@ -39,6 +39,7 @@ runs do not download the 1.48 GB ISO again.
 | `vc-dir` | `<root>\VC` | `<root>/VC` |
 | `sdk-dir` | `C:\Program Files (x86)\Microsoft SDKs\Windows\v7.0` | `<root>/WinSDK` |
 | `cmake-module` | path to `vc9-toolset.cmake` | same |
+| `msbuild` | full path of the newest `MSBuild.exe` (vswhere); no `vcvars32.bat` needed for `PlatformToolset=v90` | empty |
 | `cache-hit` | `true` when the setup files came from the cache | same |
 
 `VC9_ROOT` is also set for the following steps.
