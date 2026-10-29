@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Install VC9 SP1 (VS2008 SP1) toolchain for Visual Studio 2010-2022
+    Install VC9 SP1 (VS2008 SP1) toolchain for Visual Studio 2010 and later
 
 .DESCRIPTION
     Downloads and installs:
-    1. VC9 SP1 compiler from Windows SDK 7.0
+    1. VC9 SP1 compiler, and the headers, libs, rc.exe and mt.exe of Windows SDK 7.0
     2. MSBuild v90 toolset (bundled in this repository)
 
     Optional add-ons from VS2008 SP1 (~832 MB download):
@@ -306,7 +306,7 @@ foreach ($dir in $legacyDirs) {
     }
 }
 
-# VS2017+ (v150/v160/v170) — uses Toolset.props/Toolset.targets naming
+# VS2017+ (every MSBuild\Microsoft\VC\v* folder, v150 to v180): uses Toolset.props/Toolset.targets naming
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (Test-Path $vswhere) {
     $vsInstalls = & $vswhere -all -products '*' -property installationPath 2>$null
@@ -473,7 +473,7 @@ if ($IncludeDebugCRT) {
             $sp1Path = Get-OrDownload -FileName $SP1_NAME -Urls $SP1_URLS -ExpectedSize $SP1_SIZE -ExpectedHash $SP1_SHA256
         }
 
-        # Extract SP1 ISO → get the VC90 SP1 MSP
+        # Extract SP1 ISO -> get the VC90 SP1 MSP
         $sp1ExtractDir = "$TempDir\sp1iso"
         Write-Host "  Extracting SP1 ISO..."
         & 7z x $sp1Path -y -o"$sp1ExtractDir" $SP1_MSP | Out-Null
@@ -482,7 +482,7 @@ if ($IncludeDebugCRT) {
             exit 1
         }
 
-        # Extract MSP → flat files with FL_ naming convention
+        # Extract MSP -> flat files with FL_ naming convention
         Write-Host "  Extracting VC90 SP1 MSP..."
         & 7z x "$sp1ExtractDir\$SP1_MSP" -y -o"$mspDir" | Out-Null
         Remove-Item -Recurse -Force $sp1ExtractDir

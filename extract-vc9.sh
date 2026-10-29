@@ -37,7 +37,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Downloads (URLs, sizes, SHA-256) are in fetch-vc9.sh
+# fetch-vc9.sh downloads and verifies the ISOs (URLs, sizes, SHA-256 in downloads.txt)
 SP1_MSP_NAME="VC90sp1-KB947888-x86-enu.msp"
 
 # --- Parse arguments ---
