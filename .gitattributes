@@ -1,0 +1,3 @@
+# bash rejects CR, so shell scripts keep LF in Windows clones too (core.autocrlf=true gave CRLF and
+# "$'\r': command not found" from Git Bash or WSL)
+*.sh text eol=lf
