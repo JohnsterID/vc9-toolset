@@ -995,12 +995,16 @@ jobs:
           set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
           set "INCLUDE=%VCDir%\include;%SDKDir%Include"
           set "LIB=%VCDir%\lib;%SDKDir%Lib"
-          set "PATH=%VCDir%\bin;%PATH%"
+          set "PATH=%VCDir%\bin;%SDKDir%Bin;%PATH%"
 
-          :: UseEnv=true: use INCLUDE/LIB/PATH from environment
+          :: UseEnv=true: use INCLUDE/LIB/PATH from environment, so SDK 7.0's Bin (rc.exe, mt.exe) has to come
+          :: before the newer Windows SDK that vcvars32.bat puts on PATH
           :: TrackFileAccess=false: VC9 cl.exe doesn't use v170's file tracker
-          msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 /p:UseEnv=true /p:TrackFileAccess=false /v:normal
-          if errorlevel 1 exit /b 1
+          msbuild test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 /p:UseEnv=true /p:TrackFileAccess=false /v:normal > msbuild-Release.log
+          if errorlevel 1 (type msbuild-Release.log & exit /b 1)
+          type msbuild-Release.log
+          findstr /i /c:"Windows Kits" msbuild-Release.log && (echo FAIL: used a tool from a newer Windows SDK & exit /b 1)
+          findstr /i /c:"Microsoft SDKs\Windows\v7.0\Bin\mt.exe" msbuild-Release.log >nul || (echo FAIL: did not embed the manifest with SDK 7.0's mt.exe & exit /b 1)
           echo --- MSBuild v90 build PASSED ---
 
       - name: Run MSBuild output
@@ -1364,10 +1368,10 @@ jobs:
             findstr /r /c:"D9002" /c:"LNK1117" /c:"LNK4044" msbuild-%%c.log && (echo FAIL: %%c passed a switch VC9 doesn't have & exit /b 1)
             rem VS2010's Win32 default, which keeps frame pointers under /Ox
             findstr /c:" /Oy- " msbuild-%%c.log >nul || (echo FAIL: %%c has no /Oy- & exit /b 1)
-            rem rc.exe and mt.exe from SDK 7.0, not a newer SDK's from PATH
-            findstr /i /c:"\Windows Kits\" msbuild-%%c.log && (echo FAIL: %%c used a tool from a newer Windows SDK & exit /b 1)
+            rem rc.exe and mt.exe from SDK 7.0, not a newer SDK's from PATH; findstr reads a backslash before a quote as an escape
+            findstr /i /c:"Windows Kits" msbuild-%%c.log && (echo FAIL: %%c used a tool from a newer Windows SDK & exit /b 1)
+            findstr /i /c:"Microsoft SDKs\Windows\v7.0\Bin\mt.exe" msbuild-%%c.log >nul || (echo FAIL: %%c did not embed the manifest with SDK 7.0's mt.exe & exit /b 1)
           )
-          findstr /i /c:"Microsoft SDKs\Windows\v7.0\Bin\mt.exe" msbuild-Debug.log >nul || (echo FAIL: Debug did not embed the manifest with SDK 7.0's mt.exe & exit /b 1)
           rem The CL task passes IncludePath through the environment, so the next step checks the evaluated properties
           "%MSBUILD%" test\smoke.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v90 -getProperty:IncludePath -getProperty:LibraryPath -getProperty:WindowsSdkDir > props.json
           for /f "tokens=*" %%f in ('dir /s /b test\*.exe') do (
