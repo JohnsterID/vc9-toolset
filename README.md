@@ -35,8 +35,10 @@ Installs Visual C++ 2008 SP1 (`PlatformToolset=v90`) for use with Visual Studio 
 
 - **Windows runners:** installs VC9 SP1 and the MSBuild v90 toolset files, so `msbuild /p:PlatformToolset=v90`
   works (see the `action-windows` job in `.github/workflows/ci.yml` for a complete build step).
-- **Linux runners (macOS untested):** extracts the toolchain without admin rights for clang cross-builds
+- **Linux runners (macOS untested):** extracts the toolchain into a folder for clang cross-builds
   (`--target=i686-pc-windows-msvc`), see [Clang Cross-Compilation from Linux](#clang-cross-compilation-from-linux).
+  The extraction itself needs no admin rights; when `7z` or `msiextract` is missing, the action installs them with
+  `sudo apt-get` (Linux) or `brew` (macOS).
 
 Downloads are verified by size and SHA-256 (a mirror that answers with an HTML page fails the check and the next
 URL is tried), and only the setup files that get installed are cached (`cache: false` to turn that off), so later
@@ -87,6 +89,7 @@ Outside GitHub Actions, `fetch-vc9.sh <dir>` downloads and verifies the same set
 - Visual Studio 2010 or later (any edition, including Build Tools); CI builds with VS 2022 and VS 2026 (MSBuild 17
   and 18), earlier versions are untested
 - PowerShell 5.1+
+- `curl.exe` (part of Windows 10 1803 and later)
 - [7-Zip](https://www.7-zip.org/) in PATH (required on headless/Server; desktop falls back to Mount-DiskImage)
 - ~1.5 GB free disk space for download (can be cleaned up after)
 
@@ -162,12 +165,13 @@ Registry keys for MSBuild:
 
 | File | Size | Provides | Download |
 |------|------|----------|----------|
-| SDK 7.0 | 1.48 GB | VC9 SP1 compiler, CRT/STL, x64 cross-compiler, WinSDK | [Wayback Machine](https://web.archive.org/web/20161230154527/http://download.microsoft.com/download/2/E/9/2E911956-F90F-4BFB-8231-E292A7B6F287/GRMSDK_EN_DVD.iso) |
-| VS2008 SP1 | 832 MB | Debug CRT (optional `--include-debug-crt`) | [microsoft.com](https://download.microsoft.com/download/a/3/7/a371b6d1-fc5e-44f7-914c-cb452b4043a9/VS2008SP1ENUX1512962.iso) |
+| SDK 7.0 | 1.48 GB | VC9 SP1 compiler, CRT/STL, x64 cross-compiler, WinSDK | Wayback Machine captures, see `downloads.txt` |
+| VS2008 SP1 | 832 MB | Debug CRT (optional `--include-debug-crt`) | microsoft.com, see `downloads.txt` |
 | MSBuild v90 | 8 KB | `.props` + `.targets` for `PlatformToolset=v90` | bundled in `MSBuild/v90/` |
 
 Microsoft's original SDK 7.0 download link is no longer available; the ISO is sourced
-from the Wayback Machine.
+from the Wayback Machine. `downloads.txt` holds every URL with the file's size and SHA-256; the scripts
+and CI read it from there.
 
 ### Why these ISOs?
 
@@ -190,7 +194,7 @@ generates `Toolset.props` and `Toolset.targets` from them, which set the VC9 and
 paths directly (no `vcvars32.bat` needed) and turn off the compiler and linker switches
 that are newer than VC9.
 
-⚠️ **Warning**: The [archive.org GRMSDK**X** item](https://archive.org/download/grmsdkx-en-dvd/GRMSDK_EN_DVD.iso) is SDK **7.1** (VC**10**/cl 16.0, 568 MB) — do **not** use it. The correct SDK 7.0 ISO is 1.48 GB from the Wayback Machine URL above.
+**Warning**: The [archive.org GRMSDK**X** item](https://archive.org/download/grmsdkx-en-dvd/GRMSDK_EN_DVD.iso) is SDK **7.1** (VC**10**/cl 16.0, 568 MB); do **not** use it. The correct SDK 7.0 ISO is 1.48 GB from the Wayback Machine URLs in `downloads.txt`.
 
 ## Optional Add-ons (from VS2008 SP1)
 
@@ -234,12 +238,13 @@ winget install 7zip.7zip
 
 ## Linux / Cross-Platform Extraction
 
-For Linux, macOS, or WSL (no admin rights, no Windows required):
+For Linux or WSL (no Windows required; macOS is untested). The extraction runs as a normal user; only
+installing the prerequisites needs root:
 
 ```bash
-# Prerequisites
+# Prerequisites (plus bash, curl and sha256sum or shasum)
 sudo apt install p7zip-full msitools   # Debian/Ubuntu
-# brew install 7-zip msitools           # macOS
+# brew install 7-zip msitools           # macOS (untested)
 
 ./extract-vc9.sh ~/vc9sp1
 ```
@@ -268,7 +273,7 @@ Use with CMake to download and extract at configure time (requires CMake 3.19+):
 include(FetchContent)
 FetchContent_Declare(vc9_toolset
     GIT_REPOSITORY https://github.com/JohnsterID/vc9-toolset.git
-    GIT_TAG        main
+    GIT_TAG        v1.0.0   # or a full commit SHA
 )
 FetchContent_MakeAvailable(vc9_toolset)
 
@@ -365,7 +370,9 @@ features; the VC9 headers provide the standard library.
 | C++26 | | | **fails** -- `delete` of `void*` became ill-formed (P2593R1), breaks VC9's `xlocale` header |
 
 All standards from C++03 through C++23 compile and link on both x86 and
-x64, verified with clang 19 and 22.  The generated PE32/PE32+ binaries
+x64: CI runs `test/probe-cpp-std.sh` with the clang of `ubuntu-latest`
+(`linux-cross-compile-x86`) and builds the probe as C++23 with clang-cl on
+`windows-latest` (`windows-clang-cl`).  The generated PE32/PE32+ binaries
 link against MSVCR90.dll/MSVCP90.dll as expected.
 
 **Key constraints:**
