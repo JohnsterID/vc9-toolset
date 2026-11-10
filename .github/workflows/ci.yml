@@ -258,8 +258,15 @@ jobs:
           string(FIND "\${VC9_CLANG_COMPILE_FLAGS}" "_MSC_VER=1500" _p2)
           string(FIND "\${VC9_CLANG_COMPILE_FLAGS}" "--target=" _p3)
           string(FIND "\${VC9_CLANG_COMPILE_FLAGS}" "-fdelayed-template-parsing" _p4)
-          if(_p1 EQUAL -1 OR _p2 EQUAL -1 OR _p3 EQUAL -1 OR _p4 EQUAL -1)
-            message(FATAL_ERROR "Missing flag: ms-compat=\${_p1} msc-ver=\${_p2} target=\${_p3} delayed=\${_p4}")
+          string(FIND "\${VC9_CLANG_COMPILE_FLAGS}" "-nostdlibinc" _p5)
+          string(FIND "\${VC9_CLANG_COMPILE_FLAGS}" "-idirafter" _p6)
+          string(FIND "\${VC9_CLANG_COMPILE_FLAGS}" "-isystem" _p7)
+          if(_p1 EQUAL -1 OR _p2 EQUAL -1 OR _p3 EQUAL -1 OR _p4 EQUAL -1 OR _p5 EQUAL -1 OR _p6 EQUAL -1)
+            message(FATAL_ERROR "Missing flag: ms-compat=\${_p1} msc-ver=\${_p2} target=\${_p3} delayed=\${_p4} nostdlibinc=\${_p5} idirafter=\${_p6}")
+          endif()
+          # -isystem puts VC9's stdarg.h ahead of clang's (VC9 va_start breaks inlined variadic functions)
+          if(NOT _p7 EQUAL -1)
+            message(FATAL_ERROR "VC9 include dirs passed with -isystem: \${VC9_CLANG_COMPILE_FLAGS}")
           endif()
           message(STATUS "VC9_CLANG_COMPILE_FLAGS content — OK")
           CMEOF
@@ -408,7 +415,7 @@ jobs:
             -fms-compatibility -fms-extensions \
             -include "$COMPAT/vc9_compat.h" \
             -U_MSC_VER -D_MSC_VER=1500 \
-            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
             -c test/smoke.c -o "$RUNNER_TEMP/smoke_c.obj"
           echo "smoke.c compiled OK"
 
@@ -420,7 +427,7 @@ jobs:
             -fms-compatibility -fms-extensions -fdelayed-template-parsing \
             -include "$COMPAT/vc9_compat.h" \
             -U_MSC_VER -D_MSC_VER=1500 \
-            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
             -c test/smoke.cpp -o "$RUNNER_TEMP/smoke_cpp.obj"
           echo "smoke.cpp compiled OK"
 
@@ -429,7 +436,7 @@ jobs:
           VC9="$RUNNER_TEMP/vc9sp1"
           clang++ --target=i686-pc-windows-msvc \
             -fms-compatibility -fms-extensions \
-            -isystem "$VC9/VC/include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" \
             -c compat/vc9_runtime_stubs.cpp -o "$RUNNER_TEMP/vc9_stubs.obj"
           echo "vc9_runtime_stubs.cpp compiled OK"
 
@@ -490,7 +497,7 @@ jobs:
             -fms-compatibility -fms-extensions \
             -include "$COMPAT/vc9_compat.h" \
             -U_MSC_VER -D_MSC_VER=1500 -DVC9_STATIC_CRT \
-            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
             -c test/smoke.c -o "$RUNNER_TEMP/smoke_c_mt.obj"
           echo "smoke.c /MT compiled OK"
 
@@ -502,7 +509,7 @@ jobs:
             -fms-compatibility -fms-extensions -fdelayed-template-parsing \
             -include "$COMPAT/vc9_compat.h" \
             -U_MSC_VER -D_MSC_VER=1500 -DVC9_STATIC_CRT \
-            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
             -c test/smoke.cpp -o "$RUNNER_TEMP/smoke_cpp_mt.obj"
           echo "smoke.cpp /MT compiled OK"
 
@@ -652,7 +659,7 @@ jobs:
             -fms-compatibility -fms-extensions \
             -include "$COMPAT/vc9_compat.h" \
             -U_MSC_VER -D_MSC_VER=1500 -D_DEBUG -DVC9_STATIC_CRT=0 \
-            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
             -c test/smoke.c -o "$RUNNER_TEMP/smoke_c_mdd.obj"
           echo "smoke.c /MDd compiled OK"
 
@@ -684,7 +691,7 @@ jobs:
             -fms-compatibility -fms-extensions \
             -include "$COMPAT/vc9_compat.h" \
             -U_MSC_VER -D_MSC_VER=1500 -D_DEBUG -DVC9_STATIC_CRT \
-            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
             -c test/smoke.c -o "$RUNNER_TEMP/smoke_c_mtd.obj"
           echo "smoke.c /MTd compiled OK"
 
@@ -1224,7 +1231,7 @@ jobs:
             -fms-compatibility -fms-extensions \
             -include "$COMPAT/vc9_compat.h" \
             -U_MSC_VER -D_MSC_VER=1500 \
-            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
             -c test/smoke.c -o "$RUNNER_TEMP/smoke_c_x64.obj"
           echo "smoke.c x64 compiled OK"
 
@@ -1236,7 +1243,7 @@ jobs:
             -fms-compatibility -fms-extensions -fdelayed-template-parsing \
             -include "$COMPAT/vc9_compat.h" \
             -U_MSC_VER -D_MSC_VER=1500 \
-            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
             -c test/smoke.cpp -o "$RUNNER_TEMP/smoke_cpp_x64.obj"
           echo "smoke.cpp x64 compiled OK"
 
@@ -1245,7 +1252,7 @@ jobs:
           VC9="$RUNNER_TEMP/vc9sp1"
           clang++ --target=x86_64-pc-windows-msvc \
             -fms-compatibility -fms-extensions \
-            -isystem "$VC9/VC/include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" \
             -c compat/vc9_runtime_stubs.cpp -o "$RUNNER_TEMP/vc9_stubs_x64.obj"
           echo "vc9_runtime_stubs.cpp x64 compiled OK"
 
@@ -1420,10 +1427,10 @@ jobs:
           VC9="${{ steps.vc9.outputs.root }}"
           clang++ --target=i686-pc-windows-msvc -fms-compatibility -fms-extensions -fdelayed-template-parsing \
             -include compat/vc9_compat.h -U_MSC_VER -D_MSC_VER=1500 \
-            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
             -c test/smoke.cpp -o "$RUNNER_TEMP/smoke.obj"
           clang++ --target=i686-pc-windows-msvc -fms-compatibility -fms-extensions \
-            -isystem "$VC9/VC/include" -c compat/vc9_runtime_stubs.cpp -o "$RUNNER_TEMP/stubs.obj"
+            -nostdlibinc -idirafter "$VC9/VC/include" -c compat/vc9_runtime_stubs.cpp -o "$RUNNER_TEMP/stubs.obj"
           lld-link /OUT:"$RUNNER_TEMP/smoke.exe" /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup \
             /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
             "$RUNNER_TEMP/smoke.obj" "$RUNNER_TEMP/stubs.obj" msvcrt.lib msvcprt.lib kernel32.lib

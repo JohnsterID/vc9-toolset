@@ -140,9 +140,15 @@ function(vc9_setup DEST_DIR)
     endif()
 
     # Export ready-made clang cross-compile flags.
-    # Uses SHELL: prefix for multi-token flags (-include, -isystem) so that
+    # Uses SHELL: prefix for multi-token flags (-include, -idirafter) so that
     # add_compile_options() and target_compile_options() pass them correctly
-    # to the compiler (CMake would otherwise deduplicate bare -isystem tokens).
+    # to the compiler (CMake would otherwise deduplicate bare -idirafter tokens).
+    # The VC9 include dirs go after clang's builtin headers (-idirafter, not
+    # -isystem): VC9's stdarg.h/vadefs.h define va_start as the address of the
+    # last named parameter, which is wrong once clang inlines a variadic
+    # function; clang's own stdarg.h/vadefs.h use __builtin_va_start.
+    # -nostdlibinc keeps an MSVC or Windows SDK that clang finds on the host
+    # (PATH, INCLUDE, a VS install) out of the search path, ahead of VC9.
     set(VC9_CLANG_COMPILE_FLAGS
         "--target=${_vc9_target_triple}"
         "-fms-compatibility"
@@ -152,8 +158,9 @@ function(vc9_setup DEST_DIR)
         "SHELL:-include ${_vc9_script_dir}/compat/vc9_compat.h"
         "-U_MSC_VER" "-D_MSC_VER=1500"
         ${_vc9_crt_defs}
-        "SHELL:-isystem ${DEST_DIR}/VC/include"
-        "SHELL:-isystem ${DEST_DIR}/WinSDK/Include"
+        "-nostdlibinc"
+        "SHELL:-idirafter ${DEST_DIR}/VC/include"
+        "SHELL:-idirafter ${DEST_DIR}/WinSDK/Include"
         PARENT_SCOPE
     )
 
@@ -191,7 +198,15 @@ function(vc9_target_setup target)
             "See README.md § 'Clang Cross-Compilation from Linux'.")
     endif()
 
-    target_include_directories(${target} SYSTEM PRIVATE ${VC9_INCLUDE_DIRS})
+    # C and C++ get the VC9 include dirs after clang's builtin headers (see
+    # VC9_CLANG_COMPILE_FLAGS in vc9_setup); llvm-rc keeps them as include dirs.
+    foreach(_vc9_inc IN LISTS VC9_INCLUDE_DIRS)
+        target_include_directories(${target} SYSTEM PRIVATE
+            "$<$<COMPILE_LANGUAGE:RC>:${_vc9_inc}>")
+        target_compile_options(${target} PRIVATE
+            "$<$<COMPILE_LANGUAGE:C,CXX>:-idirafter${_vc9_inc}>")
+    endforeach()
+    target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:-nostdlibinc>")
 
     target_compile_options(${target} PRIVATE
         "--target=${VC9_TARGET_TRIPLE}"

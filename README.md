@@ -313,7 +313,7 @@ clang --target=i686-pc-windows-msvc \
   -fms-compatibility -fms-extensions \
   -include "$COMPAT/vc9_compat.h" \
   -U_MSC_VER -D_MSC_VER=1500 \
-  -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+  -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
   -c myfile.c -o myfile.obj
 
 # Compile C++
@@ -321,13 +321,13 @@ clang++ --target=i686-pc-windows-msvc \
   -fms-compatibility -fms-extensions -fdelayed-template-parsing \
   -include "$COMPAT/vc9_compat.h" \
   -U_MSC_VER -D_MSC_VER=1500 \
-  -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+  -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
   -c myfile.cpp -o myfile.obj
 
 # Compile runtime stubs (needed for C++ linking)
 clang++ --target=i686-pc-windows-msvc \
   -fms-compatibility -fms-extensions \
-  -isystem "$VC9/VC/include" \
+  -nostdlibinc -idirafter "$VC9/VC/include" \
   -c "$COMPAT/vc9_runtime_stubs.cpp" -o vc9_stubs.obj
 
 # Link (C)
@@ -383,6 +383,17 @@ link against MSVCR90.dll/MSVCP90.dll as expected.
   `::_invalid_parameter_noinfo()`.  The toolchain cmake module sets this
   automatically.
 
+- **VC9 include directories go after clang's builtin headers.**  Use
+  `-nostdlibinc -idirafter` with clang (or `-imsvc` with clang-cl), not
+  `-isystem`, `-I` or `/external:I`, which put VC9's `stdarg.h` and
+  `vadefs.h` first.  VC9's `va_start` takes the address of the last named
+  parameter, so a variadic function that clang inlines reads its arguments
+  from the wrong stack slots; clang's own headers use `__builtin_va_start`.
+  `-nostdlibinc` keeps an MSVC or Windows SDK that clang finds on the host
+  out of the search path.  `VC9_CLANG_COMPILE_FLAGS` and
+  `vc9_target_setup()` do this, and `test/smoke.c` / `test/smoke.cpp` fail
+  to compile when the order is wrong.
+
 - **Library is C++03 + TR1.**  Language features are unlimited (up to
   C++23), but the STL containers, algorithms, and utilities are VC9's
   C++03 implementations.  C++11 library additions (`<thread>`,
@@ -408,7 +419,7 @@ clang++ -std=c++23 --target=i686-pc-windows-msvc \
   -Wno-delayed-template-parsing-in-cxx20 \
   -include "$COMPAT/vc9_compat.h" \
   -U_MSC_VER -D_MSC_VER=1500 \
-  -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+  -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
   -c myfile.cpp -o myfile.obj
 ```
 

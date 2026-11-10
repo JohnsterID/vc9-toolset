@@ -76,7 +76,7 @@ for arch in $ARCHS; do
     stubs_obj="$TMPDIR/vc9_stubs_${arch}.obj"
     clang++ --target="$triple" \
         -fms-compatibility -fms-extensions \
-        -isystem "$VC9/VC/include" \
+        -nostdlibinc -idirafter "$VC9/VC/include" \
         -c "$COMPAT/vc9_runtime_stubs.cpp" -o "$stubs_obj" 2>/dev/null \
         || die "Failed to compile runtime stubs for $arch"
 
@@ -93,7 +93,7 @@ for arch in $ARCHS; do
             -Wno-delayed-template-parsing-in-cxx20 \
             -include "$COMPAT/vc9_compat.h" \
             -U_MSC_VER -D_MSC_VER=1500 \
-            -isystem "$VC9/VC/include" -isystem "$VC9/WinSDK/Include" \
+            -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
             -c "$PROBE_SRC" -o "$obj" 2>&1)
         if [ $? -ne 0 ]; then
             echo "  FAIL  $label  (compile)"
