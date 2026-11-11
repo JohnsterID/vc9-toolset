@@ -436,7 +436,7 @@ headers with clang on Linux:
 | File | When needed | What it fixes |
 |------|-------------|---------------|
 | `vc9_compat.h` | Always (compile-time) | SAL annotation paths, `__drv_*` driver macros, CRT runtime macros (`_DLL`, `_MT`; see [CRT configuration](#crt-configuration)), `_CRT_SECURE_NO_WARNINGS` |
-| `vc9_runtime_stubs.cpp` | C++ linking only | `__std_terminate`, sized `operator delete`, magic-static init (`_Init_thread_*`) |
+| `vc9_runtime_stubs.cpp` | C++ linking only | `__std_terminate`, sized `operator delete` and `operator delete[]`, magic-static init (`_Init_thread_*`) |
 
 Use `vc9_compat.h` via `-include compat/vc9_compat.h` (one flag) instead of 30+
 individual `-D` flags on the command line.
