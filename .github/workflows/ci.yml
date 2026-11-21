@@ -24,10 +24,12 @@ jobs:
           bash -n extract-vc9.sh
           bash -n fetch-vc9.sh
           bash -n test/probe-cpp-std.sh
+          bash -n test/check-pe-imports.sh
 
       - name: Shell lint (shellcheck)
         run: |
           shellcheck fetch-vc9.sh
+          shellcheck test/check-pe-imports.sh
           shellcheck extract-vc9.sh || true  # advisory, don't block
           shellcheck test/probe-cpp-std.sh || true
 
@@ -45,6 +47,7 @@ jobs:
           test -x extract-vc9.sh
           test -x fetch-vc9.sh
           test -x test/probe-cpp-std.sh
+          test -x test/check-pe-imports.sh
           echo "All repo files present and scripts are executable"
 
   # ── CMake integration test (every push, ~15 s) ────────────────────
@@ -467,26 +470,8 @@ jobs:
 
       - name: 'Verify PE imports (x86)'
         run: |
-          echo "=== smoke_c.exe ==="
-          objdump -p "$RUNNER_TEMP/smoke_c.exe" | grep -i "DLL Name" || true
-          echo ""
-          echo "=== smoke_cpp.exe ==="
-          objdump -p "$RUNNER_TEMP/smoke_cpp.exe" | grep -i "DLL Name" || true
-          echo ""
-          # Verify VC9 runtime DLLs are imported (not VC14+ ucrt)
-          for exe in "$RUNNER_TEMP/smoke_c.exe" "$RUNNER_TEMP/smoke_cpp.exe"; do
-            name=$(basename "$exe")
-            if objdump -p "$exe" | grep -qi "MSVCR90.dll"; then
-              echo "OK: $name imports MSVCR90.dll"
-            else
-              echo "WARN: $name does NOT import MSVCR90.dll"
-            fi
-          done
-          if objdump -p "$RUNNER_TEMP/smoke_cpp.exe" | grep -qi "MSVCP90.dll"; then
-            echo "OK: smoke_cpp.exe imports MSVCP90.dll"
-          else
-            echo "WARN: smoke_cpp.exe does NOT import MSVCP90.dll"
-          fi
+          ./test/check-pe-imports.sh "$RUNNER_TEMP/smoke_c.exe" +MSVCR90.dll -MSVCR90D.dll
+          ./test/check-pe-imports.sh "$RUNNER_TEMP/smoke_cpp.exe" +MSVCR90.dll +MSVCP90.dll -MSVCR90D.dll
 
       # ── /MT (static CRT) smoke test ──────────────────────────────────
       - name: 'Clang cross-compile /MT: smoke.c (C, static CRT)'
@@ -540,22 +525,8 @@ jobs:
 
       - name: 'Verify PE imports /MT (static CRT — no MSVCR90.dll)'
         run: |
-          echo "=== smoke_c_mt.exe ==="
-          objdump -p "$RUNNER_TEMP/smoke_c_mt.exe" | grep -i "DLL Name" || echo "(no DLL imports)"
-          echo ""
-          echo "=== smoke_cpp_mt.exe ==="
-          objdump -p "$RUNNER_TEMP/smoke_cpp_mt.exe" | grep -i "DLL Name" || echo "(no DLL imports)"
-          echo ""
-          # Static CRT should NOT import MSVCR90.dll — only KERNEL32.dll
-          for exe in "$RUNNER_TEMP/smoke_c_mt.exe" "$RUNNER_TEMP/smoke_cpp_mt.exe"; do
-            name=$(basename "$exe")
-            if objdump -p "$exe" | grep -qi "MSVCR90.dll"; then
-              echo "FAIL: $name imports MSVCR90.dll (should be static)"
-              exit 1
-            fi
-            if objdump -p "$exe" | grep -qi "KERNEL32.dll"; then
-              echo "OK: $name imports KERNEL32.dll only (static CRT)"
-            fi
+          for exe in smoke_c_mt.exe smoke_cpp_mt.exe; do
+            ./test/check-pe-imports.sh "$RUNNER_TEMP/$exe" +KERNEL32.dll -MSVCR90.dll -MSVCP90.dll
           done
 
       # ── Ninja + vc9_target_setup() integration ────────────────────────
@@ -580,11 +551,8 @@ jobs:
           cmake --build /tmp/ninja-x86/build
           file /tmp/ninja-x86/build/smoke_c.exe   | grep -q "PE32 executable" || { echo "FAIL: not PE32"; exit 1; }
           file /tmp/ninja-x86/build/smoke_cpp.exe  | grep -q "PE32 executable" || { echo "FAIL: not PE32"; exit 1; }
-          objdump -p /tmp/ninja-x86/build/smoke_c.exe | grep -qi "MSVCR90.dll" \
-            || { echo "FAIL: smoke_c.exe missing MSVCR90.dll import"; exit 1; }
-          if objdump -p /tmp/ninja-x86/build/smoke_c.exe | grep -qi "MSVCR90D.dll"; then
-            echo "FAIL: smoke_c.exe has spurious MSVCR90D.dll import (debug CRT leak)"; exit 1
-          fi
+          ./test/check-pe-imports.sh /tmp/ninja-x86/build/smoke_c.exe +MSVCR90.dll -MSVCR90D.dll
+          ./test/check-pe-imports.sh /tmp/ninja-x86/build/smoke_cpp.exe +MSVCR90.dll +MSVCP90.dll -MSVCR90D.dll
           echo "Ninja x86 build PASSED"
 
       # ── C++ standard probe (C++03-C++23, x86+x64) ─────────────────
@@ -675,13 +643,7 @@ jobs:
 
       - name: 'Verify PE imports /MDd (debug DLL CRT — MSVCR90D.dll)'
         run: |
-          if objdump -p "$RUNNER_TEMP/smoke_c_mdd.exe" | grep -qi "MSVCR90D.dll"; then
-            echo "OK: smoke_c_mdd.exe imports MSVCR90D.dll"
-          else
-            echo "FAIL: smoke_c_mdd.exe should import MSVCR90D.dll"
-            objdump -p "$RUNNER_TEMP/smoke_c_mdd.exe" | grep -i "DLL Name" || true
-            exit 1
-          fi
+          ./test/check-pe-imports.sh "$RUNNER_TEMP/smoke_c_mdd.exe" +MSVCR90D.dll -MSVCR90.dll
 
       - name: 'Clang cross-compile /MTd: smoke.c (debug static CRT)'
         run: |
@@ -707,11 +669,7 @@ jobs:
 
       - name: 'Verify PE imports /MTd (debug static CRT — no MSVCR90D.dll)'
         run: |
-          if objdump -p "$RUNNER_TEMP/smoke_c_mtd.exe" | grep -qi "MSVCR90D.dll"; then
-            echo "FAIL: smoke_c_mtd.exe imports MSVCR90D.dll (should be static)"
-            exit 1
-          fi
-          echo "OK: smoke_c_mtd.exe does NOT import MSVCR90D.dll (static debug CRT)"
+          ./test/check-pe-imports.sh "$RUNNER_TEMP/smoke_c_mtd.exe" +KERNEL32.dll -MSVCR90D.dll -MSVCR90.dll
 
   # ── Windows: extract ISO with 7z (shared step logic) ───────────────
   # Mount-DiskImage fails on Windows Server runners.
@@ -832,15 +790,15 @@ jobs:
             exit /b 1
           )
           echo OK: smoke_cpp.exe has linker version 9.00
-          :: Verify no ucrt dependency (would indicate wrong runtime)
-          dumpbin /dependents smoke_c.exe | findstr /i "ucrtbase api-ms-win-crt" >nul
-          if not errorlevel 1 (
-            echo FAIL: smoke_c.exe depends on UCRT — wrong runtime!
-            exit /b 1
-          )
-          echo OK: no UCRT dependency detected
           echo --- PE verification PASSED ---
           exit /b 0
+
+      - name: 'Verify PE imports (static CRT)'
+        shell: bash
+        run: |
+          for exe in smoke_c.exe smoke_cpp.exe; do
+            ./test/check-pe-imports.sh "$exe" +KERNEL32.dll -MSVCR90.dll -MSVCP90.dll
+          done
 
       # ── v90 cl.exe: C++ standard probe (confirm C++03 + TR1 ceiling) ──
       - name: 'v90 cl.exe: compile + run cpp_std_probe.cpp (C++03 + TR1 only)'
@@ -949,19 +907,9 @@ jobs:
           if errorlevel 1 exit /b 1
           echo --- smoke.c /MDd PASSED ---
 
-      - name: 'Verify PE: /MDd links to MSVCR90D.dll'
-        shell: cmd
-        run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
-          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
-          dumpbin /dependents smoke_mdd.exe | findstr /i "MSVCR90D" >nul
-          if errorlevel 1 (
-            echo FAIL: smoke_mdd.exe does not depend on MSVCR90D.dll
-            dumpbin /dependents smoke_mdd.exe
-            exit /b 1
-          )
-          echo OK: smoke_mdd.exe depends on MSVCR90D.dll
-          echo --- PE verification /MDd PASSED ---
+      - name: 'Verify PE imports: /MDd links to MSVCR90D.dll'
+        shell: bash
+        run: ./test/check-pe-imports.sh smoke_mdd.exe +MSVCR90D.dll -MSVCR90.dll
 
   # ── Windows: MSBuild /p:PlatformToolset=v90 ──────────────────────
   windows-msbuild:
@@ -1049,6 +997,10 @@ jobs:
             exit /b 0
           )
 
+      - name: 'Verify PE imports (MSBuild output, /MD)'
+        shell: bash
+        run: ./test/check-pe-imports.sh test/Release/smoke.exe +MSVCR90.dll -MSVCR90D.dll
+
   # ── Windows: clang-cl + VC9 headers/libs ──────────────────────────
   windows-clang-cl:
     needs: download-isos
@@ -1125,20 +1077,13 @@ jobs:
           echo === smoke_cpp_clang.exe ===
           dumpbin /dependents smoke_cpp_clang.exe
           dumpbin /headers smoke_cpp_clang.exe | findstr /i "linker version machine"
-          echo.
-          dumpbin /dependents smoke_c_clang.exe | findstr /i "MSVCR90" >nul
-          if errorlevel 1 (
-            echo FAIL: smoke_c_clang.exe does not depend on MSVCR90.dll
-            exit /b 1
-          )
-          echo OK: smoke_c_clang.exe depends on MSVCR90.dll
-          dumpbin /dependents smoke_cpp_clang.exe | findstr /i "MSVCP90" >nul
-          if errorlevel 1 (
-            echo FAIL: smoke_cpp_clang.exe does not depend on MSVCP90.dll
-            exit /b 1
-          )
-          echo OK: smoke_cpp_clang.exe depends on MSVCP90.dll
-          echo --- PE verification PASSED ---
+          exit /b 0
+
+      - name: 'Verify PE imports (clang-cl)'
+        shell: bash
+        run: |
+          ./test/check-pe-imports.sh smoke_c_clang.exe +MSVCR90.dll -MSVCR90D.dll
+          ./test/check-pe-imports.sh smoke_cpp_clang.exe +MSVCR90.dll +MSVCP90.dll -MSVCR90D.dll
 
       # ── C++23 standard probe (clang-cl, x86) ───────────────────────
       # Use -std=c++23 (GCC-style) because clang-cl doesn't recognise
@@ -1167,26 +1112,9 @@ jobs:
           if errorlevel 1 exit /b 1
           echo --- clang-cl C++23 probe PASSED ---
 
-      - name: 'Verify PE: probe_cpp23.exe depends on MSVCR90.dll'
-        shell: cmd
-        run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
-          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
-          dumpbin /dependents probe_cpp23.exe
-          dumpbin /dependents probe_cpp23.exe | findstr /i "MSVCR90" >nul
-          if errorlevel 1 (
-            echo FAIL: probe_cpp23.exe does not depend on MSVCR90.dll
-            exit /b 1
-          )
-          echo OK: C++23 binary depends on MSVCR90.dll
-          dumpbin /dependents probe_cpp23.exe | findstr /i "ucrtbase api-ms-win-crt" >nul
-          if not errorlevel 1 (
-            echo FAIL: probe_cpp23.exe depends on UCRT — wrong runtime!
-            exit /b 1
-          )
-          echo OK: no UCRT dependency
-          echo --- C++23 PE verification PASSED ---
-          exit /b 0
+      - name: 'Verify PE imports: probe_cpp23.exe'
+        shell: bash
+        run: ./test/check-pe-imports.sh probe_cpp23.exe +MSVCR90.dll -MSVCR90D.dll
 
   # ── Linux: clang cross-compile x64 (amd64 libs) ──────────────────
   linux-cross-compile-x64:
@@ -1283,25 +1211,8 @@ jobs:
 
       - name: 'Verify PE imports (x64)'
         run: |
-          echo "=== smoke_c_x64.exe ==="
-          objdump -p "$RUNNER_TEMP/smoke_c_x64.exe" | grep -i "DLL Name" || true
-          echo ""
-          echo "=== smoke_cpp_x64.exe ==="
-          objdump -p "$RUNNER_TEMP/smoke_cpp_x64.exe" | grep -i "DLL Name" || true
-          echo ""
-          for exe in "$RUNNER_TEMP/smoke_c_x64.exe" "$RUNNER_TEMP/smoke_cpp_x64.exe"; do
-            name=$(basename "$exe")
-            if objdump -p "$exe" | grep -qi "MSVCR90.dll"; then
-              echo "OK: $name imports MSVCR90.dll"
-            else
-              echo "WARN: $name does NOT import MSVCR90.dll"
-            fi
-          done
-          if objdump -p "$RUNNER_TEMP/smoke_cpp_x64.exe" | grep -qi "MSVCP90.dll"; then
-            echo "OK: smoke_cpp_x64.exe imports MSVCP90.dll"
-          else
-            echo "WARN: smoke_cpp_x64.exe does NOT import MSVCP90.dll"
-          fi
+          ./test/check-pe-imports.sh "$RUNNER_TEMP/smoke_c_x64.exe" +MSVCR90.dll -MSVCR90D.dll
+          ./test/check-pe-imports.sh "$RUNNER_TEMP/smoke_cpp_x64.exe" +MSVCR90.dll +MSVCP90.dll -MSVCR90D.dll
 
       # ── Ninja + vc9_target_setup() integration (x64) ──────────────────
       - name: 'Ninja + vc9_target_setup: build + verify x64'
@@ -1325,11 +1236,8 @@ jobs:
           cmake --build /tmp/ninja-x64/build
           file /tmp/ninja-x64/build/smoke_c.exe   | grep -q "PE32+" || { echo "FAIL: not PE32+"; exit 1; }
           file /tmp/ninja-x64/build/smoke_cpp.exe  | grep -q "PE32+" || { echo "FAIL: not PE32+"; exit 1; }
-          objdump -p /tmp/ninja-x64/build/smoke_c.exe | grep -qi "MSVCR90.dll" \
-            || { echo "FAIL: smoke_c.exe missing MSVCR90.dll import"; exit 1; }
-          if objdump -p /tmp/ninja-x64/build/smoke_c.exe | grep -qi "MSVCR90D.dll"; then
-            echo "FAIL: smoke_c.exe has spurious MSVCR90D.dll import (debug CRT leak)"; exit 1
-          fi
+          ./test/check-pe-imports.sh /tmp/ninja-x64/build/smoke_c.exe +MSVCR90.dll -MSVCR90D.dll
+          ./test/check-pe-imports.sh /tmp/ninja-x64/build/smoke_cpp.exe +MSVCR90.dll +MSVCP90.dll -MSVCR90D.dll
           echo "Ninja x64 build PASSED"
 
   # -- GitHub Action (action.yml) -------------------------------------
@@ -1386,6 +1294,13 @@ jobs:
             "%%f" || exit /b 1
           )
 
+      - name: 'Verify PE imports (Debug and Release, /MD)'
+        shell: bash
+        run: |
+          for c in Debug Release; do
+            ./test/check-pe-imports.sh "test/$c/smoke.exe" +MSVCR90.dll -MSVCR90D.dll
+          done
+
       - name: Check the v90 IncludePath, LibraryPath and WindowsSdkDir
         shell: pwsh
         run: |
@@ -1435,6 +1350,7 @@ jobs:
             /LIBPATH:"$VC9/VC/lib" /LIBPATH:"$VC9/WinSDK/Lib" \
             "$RUNNER_TEMP/smoke.obj" "$RUNNER_TEMP/stubs.obj" msvcrt.lib msvcprt.lib kernel32.lib
           file "$RUNNER_TEMP/smoke.exe" | grep -q "PE32 executable"
+          ./test/check-pe-imports.sh "$RUNNER_TEMP/smoke.exe" +MSVCR90.dll +MSVCP90.dll -MSVCR90D.dll
 
       - name: 'CMake toolchain (vc9-cross-x86.cmake) + vc9_target_setup: smoke.c, smoke.cpp'
         run: |
@@ -1457,8 +1373,9 @@ jobs:
           cmake --build "$RUNNER_TEMP/cm/build"
           for exe in smoke_c smoke_cpp; do
             file "$RUNNER_TEMP/cm/build/$exe.exe" | grep -q "PE32 executable" || { echo "FAIL: $exe not PE32"; exit 1; }
-            objdump -p "$RUNNER_TEMP/cm/build/$exe.exe" | grep -qi "MSVCR90.dll" || { echo "FAIL: $exe has no MSVCR90.dll import"; exit 1; }
           done
+          ./test/check-pe-imports.sh "$RUNNER_TEMP/cm/build/smoke_c.exe" +MSVCR90.dll -MSVCR90D.dll
+          ./test/check-pe-imports.sh "$RUNNER_TEMP/cm/build/smoke_cpp.exe" +MSVCR90.dll +MSVCP90.dll -MSVCR90D.dll
 
   action-cache-hit:
     name: 'Action: Linux, second run (cache hit)'
