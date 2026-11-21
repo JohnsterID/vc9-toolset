@@ -28,8 +28,8 @@ static int first_vararg(int last, ...) {
 }
 #endif
 
-// delete[] of a type with a destructor: clang calls the sized
-// operator delete[](void*, size_t), which the VC9 CRT lacks
+// delete[] of a type with a destructor: clang 19 and later call the sized
+// operator delete[](void*, size_t) from C++14 on, which the VC9 CRT lacks
 // (compat/vc9_runtime_stubs.cpp provides it). noinline keeps the call.
 struct Named {
     std::string name;

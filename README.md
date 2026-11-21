@@ -273,7 +273,7 @@ Use with CMake to download and extract at configure time (requires CMake 3.19+):
 include(FetchContent)
 FetchContent_Declare(vc9_toolset
     GIT_REPOSITORY https://github.com/JohnsterID/vc9-toolset.git
-    GIT_TAG        v1.0.0   # or a full commit SHA
+    GIT_TAG        v1.1.0   # or a full commit SHA
 )
 FetchContent_MakeAvailable(vc9_toolset)
 
@@ -367,7 +367,7 @@ features; the VC9 headers provide the standard library.
 | C++17 | structured bindings, `if constexpr`, fold expressions, inline variables, nested namespaces, `[[nodiscard]]`, ... | full | supported |
 | C++20 | concepts, `consteval`, `constinit`, designated initializers, abbreviated templates, `using enum`, `[[likely]]`, ... | full | supported |
 | C++23 | deducing this, `static operator()`, `if consteval`, multidimensional `operator[]`, `auto(x)`, `[[assume]]`, ... | full | supported |
-| C++26 | | | **fails** -- `delete` of `void*` became ill-formed (P2593R1), breaks VC9's `xlocale` header |
+| C++26 | | | **fails** with clang 19 and later -- deleting a pointer to an incomplete type, `void*` included, became ill-formed (P3144R2), which breaks VC9's `xlocale` and `xlocnum` headers (included by `<iostream>`); clang 18 only warns |
 
 All standards from C++03 through C++23 compile and link on both x86 and
 x64.  CI pins the clang versions it tests, so a runner image update cannot
@@ -413,6 +413,26 @@ otherwise (`test/check-pe-imports.sh`).
 - **`-Wno-delayed-template-parsing-in-cxx20`** is included in the
   toolchain flags to suppress clang's deprecation warning at C++20+.
 
+- **Set the language standard explicitly.**  Without `-std`, clang picks
+  it from the MSVC version it emulates: C++11 below 19.00, C++14 from
+  19.00.  clang-cl with `-fms-compatibility-version=15.00` builds as
+  C++11, and so does clang-cl run from a VC9 environment on Windows,
+  where it takes 15.00 from VC9's `cl.exe` on `PATH`.  clang with
+  `--target=*-windows-msvc` and no version builds as C++14 (it assumes
+  19.33).  Pass `-std=c++NN` / `/std:c++NN` or set `CMAKE_CXX_STANDARD`,
+  so the standard, and with it sized deallocation, does not depend on the
+  environment.
+
+- **Sized deallocation (clang 19 and later, C++14 and later).**  Clang 19
+  turned `-fsized-deallocation` on by default from C++14, so `delete`
+  calls `operator delete(void*, size_t)` and `delete[]` of a type with a
+  destructor calls `operator delete[](void*, size_t)`; the VC9 CRT has
+  neither.  Either link `compat/vc9_runtime_stubs.cpp`, which forwards
+  both to the unsized operators (so a replaced global `operator delete`
+  still receives every block), or turn sized deallocation off with
+  `-fno-sized-deallocation` (clang) or `/Zc:sizedDealloc-` (clang-cl).
+  C++11 builds and clang 18 never call them.  CI checks both ways.
+
 **CMake:**
 
 ```cmake
@@ -445,7 +465,7 @@ headers with clang on Linux:
 | File | When needed | What it fixes |
 |------|-------------|---------------|
 | `vc9_compat.h` | Always (compile-time) | SAL annotation paths, `__drv_*` driver macros, CRT runtime macros (`_DLL`, `_MT`; see [CRT configuration](#crt-configuration)), `_CRT_SECURE_NO_WARNINGS` |
-| `vc9_runtime_stubs.cpp` | C++ linking only | `__std_terminate`, sized `operator delete` and `operator delete[]`, magic-static init (`_Init_thread_*`) |
+| `vc9_runtime_stubs.cpp` | C++ linking only | `__std_terminate`, sized `operator delete` and `operator delete[]` (clang 19+, C++14+; see [sized deallocation](#c-standard-support)), magic-static init (`_Init_thread_*`) |
 
 Use `vc9_compat.h` via `-include compat/vc9_compat.h` (one flag) instead of 30+
 individual `-D` flags on the command line.

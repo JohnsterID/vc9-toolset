@@ -45,10 +45,13 @@ void _Init_thread_abort(int* p)  { if (p) *p = 0; }
 
 } /* extern "C" */
 
-/* clang (MSVC mode) emits sized delete (C++14 N3778) even when targeting
-   older standards: the scalar form, and the array form for delete[] of a
-   type with a destructor (the array cookie gives the size).  VC9 libs only
-   have the unsized overloads.
+/* clang 19 and later emit sized delete (C++14 N3778) by default from C++14
+   on: the scalar form, and the array form for delete[] of a type with a
+   destructor (the array cookie gives the size).  VC9 libs only have the
+   unsized overloads.  -fno-sized-deallocation (clang) or /Zc:sizedDealloc-
+   (clang-cl) avoids the calls instead.  These forward to the unsized
+   operators rather than free(), so a replaced global operator delete still
+   receives every block.
    decltype(sizeof(0)) gives unsigned int on x86, unsigned __int64 on x64. */
 void operator delete(void* p, decltype(sizeof(0))) noexcept {
     ::operator delete(p);
