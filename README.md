@@ -370,10 +370,19 @@ features; the VC9 headers provide the standard library.
 | C++26 | | | **fails** -- `delete` of `void*` became ill-formed (P2593R1), breaks VC9's `xlocale` header |
 
 All standards from C++03 through C++23 compile and link on both x86 and
-x64: CI runs `test/probe-cpp-std.sh` with the clang of `ubuntu-latest`
-(`linux-cross-compile-x86`) and builds the probe as C++23 with clang-cl on
-`windows-latest` (`windows-clang-cl`).  The generated PE32/PE32+ binaries
-link against MSVCR90.dll/MSVCP90.dll as expected.
+x64.  CI pins the clang versions it tests, so a runner image update cannot
+change the result unnoticed:
+
+| Job | clang |
+|-----|-------|
+| `linux-cross-compile-x86` (runs `test/probe-cpp-std.sh`) | 18 and 20 (Ubuntu 24.04's `clang-18`, `clang-20`), 21 (Ubuntu 26.04's `clang-21`) |
+| `linux-cross-compile-x64`, `linux-sp1-addons` | 20 (Ubuntu 24.04's `clang-20`) |
+| `windows-clang-cl` (builds the probe as C++23) | LLVM 20.1.8 |
+| `action-linux` | the image's `clang` package, unpinned (18 on `ubuntu-24.04`) |
+
+The generated PE32/PE32+ binaries import MSVCR90.dll/MSVCP90.dll (or no
+CRT DLL with `/MT`) and nothing from a newer Visual C++ runtime; CI fails
+otherwise (`test/check-pe-imports.sh`).
 
 **Key constraints:**
 

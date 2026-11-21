@@ -25,11 +25,13 @@ jobs:
           bash -n fetch-vc9.sh
           bash -n test/probe-cpp-std.sh
           bash -n test/check-pe-imports.sh
+          bash -n test/check-sized-delete.sh
 
       - name: Shell lint (shellcheck)
         run: |
           shellcheck fetch-vc9.sh
           shellcheck test/check-pe-imports.sh
+          shellcheck test/check-sized-delete.sh
           shellcheck extract-vc9.sh || true  # advisory, don't block
           shellcheck test/probe-cpp-std.sh || true
 
@@ -48,6 +50,7 @@ jobs:
           test -x fetch-vc9.sh
           test -x test/probe-cpp-std.sh
           test -x test/check-pe-imports.sh
+          test -x test/check-sized-delete.sh
           echo "All repo files present and scripts are executable"
 
   # ── CMake integration test (every push, ~15 s) ────────────────────
@@ -329,16 +332,37 @@ jobs:
         run: ./fetch-vc9.sh --include-debug-crt --isos-only .
 
   # ── Linux: extract + cross-compile x86 (/MD + /MT) ────────────────
+  # Pinned clang versions: 18 never emits sized deallocation, 19 and later do
+  # from C++14 (so only they need the sized-delete stubs), 20 matches the
+  # Windows jobs' LLVM, 21 is ubuntu-26.04's clang.
   linux-cross-compile-x86:
+    name: 'linux-cross-compile-x86 (clang ${{ matrix.clang }}, ${{ matrix.os }})'
     needs: download-isos
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, clang: 18 }
+          - { os: ubuntu-24.04, clang: 20 }
+          - { os: ubuntu-26.04, clang: 21 }
+    runs-on: ${{ matrix.os }}
+    env:
+      CLANG_VERSION: ${{ matrix.clang }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install tools
+      - name: Install tools (clang ${{ env.CLANG_VERSION }} from the Ubuntu archive)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y p7zip-full msitools clang lld llvm
+          sudo apt-get install -y p7zip-full msitools "clang-$CLANG_VERSION" "lld-$CLANG_VERSION" "llvm-$CLANG_VERSION"
+          echo "/usr/lib/llvm-$CLANG_VERSION/bin" >> "$GITHUB_PATH"
+
+      - name: Check the clang version
+        run: |
+          clang --version
+          lld-link --version
+          clang --version | head -1 | grep -q "clang version $CLANG_VERSION\." \
+            || { echo "FAIL: clang on PATH is not clang $CLANG_VERSION"; exit 1; }
 
       - name: Restore cached ISO
         uses: actions/cache@v6
@@ -442,6 +466,23 @@ jobs:
             -nostdlibinc -idirafter "$VC9/VC/include" \
             -c compat/vc9_runtime_stubs.cpp -o "$RUNNER_TEMP/vc9_stubs.obj"
           echo "vc9_runtime_stubs.cpp compiled OK"
+
+      # smoke_cpp.obj is the default standard (C++14 for clang with an MSVC target)
+      - name: 'Sized deallocation: clang >= 19 from C++14, none at C++11 or with -fno-sized-deallocation'
+        run: |
+          VC9="$RUNNER_TEMP/vc9sp1"
+          COMPAT="$GITHUB_WORKSPACE/compat"
+          for variant in "cxx11:-std=c++11" "nosized:-std=c++14 -fno-sized-deallocation"; do
+            clang++ --target=i686-pc-windows-msvc ${variant#*:} \
+              -fms-compatibility -fms-extensions -fdelayed-template-parsing \
+              -include "$COMPAT/vc9_compat.h" \
+              -U_MSC_VER -D_MSC_VER=1500 \
+              -nostdlibinc -idirafter "$VC9/VC/include" -idirafter "$VC9/WinSDK/Include" \
+              -c test/smoke.cpp -o "$RUNNER_TEMP/smoke_cpp_${variant%%:*}.obj"
+            ./test/check-sized-delete.sh "$RUNNER_TEMP/smoke_cpp_${variant%%:*}.obj" no
+          done
+          if [ "$CLANG_VERSION" -ge 19 ]; then expect=yes; else expect=no; fi
+          ./test/check-sized-delete.sh "$RUNNER_TEMP/smoke_cpp.obj" "$expect"
 
       - name: 'lld-link: smoke_c.exe'
         run: |
@@ -563,14 +604,24 @@ jobs:
   # ── Linux: SP1 add-ons (debug CRT) + /MDd + /MTd ─────────────────
   linux-sp1-addons:
     needs: download-isos
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      CLANG_VERSION: 20
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install tools
+      - name: Install tools (clang ${{ env.CLANG_VERSION }} from the Ubuntu archive)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y p7zip-full msitools clang lld llvm
+          sudo apt-get install -y p7zip-full msitools "clang-$CLANG_VERSION" "lld-$CLANG_VERSION" "llvm-$CLANG_VERSION"
+          echo "/usr/lib/llvm-$CLANG_VERSION/bin" >> "$GITHUB_PATH"
+
+      - name: Check the clang version
+        run: |
+          clang --version
+          lld-link --version
+          clang --version | head -1 | grep -q "clang version $CLANG_VERSION\." \
+            || { echo "FAIL: clang on PATH is not clang $CLANG_VERSION"; exit 1; }
 
       - name: Restore cached SDK 7.0 ISO
         uses: actions/cache@v6
@@ -1005,8 +1056,27 @@ jobs:
   windows-clang-cl:
     needs: download-isos
     runs-on: windows-latest
+    env:
+      LLVM_VERSION: 20.1.8
     steps:
       - uses: actions/checkout@v7
+
+      # The image's LLVM changes with image updates; install the pinned version when it differs
+      - name: LLVM ${{ env.LLVM_VERSION }} (pinned)
+        shell: pwsh
+        run: |
+          $llvmBin = "$env:ProgramFiles\LLVM\bin"
+          $want = "clang version $([regex]::Escape($env:LLVM_VERSION))(\s|$)"
+          $have = if (Test-Path "$llvmBin\clang-cl.exe") { & "$llvmBin\clang-cl.exe" --version | Select-Object -First 1 } else { "none" }
+          Write-Host "Image LLVM: $have"
+          if ($have -notmatch $want) {
+            choco install llvm --version=$env:LLVM_VERSION --allow-downgrade -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "choco install llvm $env:LLVM_VERSION failed" }
+          }
+          $have = & "$llvmBin\clang-cl.exe" --version | Select-Object -First 1
+          if ($have -notmatch $want) { throw "clang-cl is '$have', expected $env:LLVM_VERSION" }
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$llvmBin\clang-cl.exe" --version
 
       - name: Restore cached ISO
         uses: actions/cache@v6
@@ -1085,6 +1155,35 @@ jobs:
           ./test/check-pe-imports.sh smoke_c_clang.exe +MSVCR90.dll -MSVCR90D.dll
           ./test/check-pe-imports.sh smoke_cpp_clang.exe +MSVCR90.dll +MSVCP90.dll -MSVCR90D.dll
 
+      # -fms-compatibility-version=15.00 makes clang-cl default to C++11, so smoke_cpp.obj has no
+      # sized delete; C++14 has it (clang >= 19) unless /Zc:sizedDealloc- turns it off
+      - name: 'clang-cl C++14: sized delete with the stubs, and /Zc:sizedDealloc-'
+        shell: cmd
+        run: |
+          set "VCDir=%ProgramFiles(x86)%\Microsoft Visual Studio 9.0\VC"
+          set "SDKDir=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.0\"
+          clang-cl /nologo -m32 -fms-compatibility-version=15.00 /std:c++14 -imsvc "%VCDir%\include" -imsvc "%SDKDir%Include" -D_MSC_VER=1500 /FI "compat\vc9_compat.h" /EHsc /c test\smoke.cpp /Fo:smoke_cpp14.obj
+          if errorlevel 1 exit /b 1
+          clang-cl /nologo -m32 -fms-compatibility-version=15.00 /std:c++14 /Zc:sizedDealloc- -imsvc "%VCDir%\include" -imsvc "%SDKDir%Include" -D_MSC_VER=1500 /FI "compat\vc9_compat.h" /EHsc /c test\smoke.cpp /Fo:smoke_cpp14_nosized.obj
+          if errorlevel 1 exit /b 1
+          for %%v in (smoke_cpp14 smoke_cpp14_nosized) do (
+            lld-link /OUT:%%v.exe /MACHINE:x86 /SUBSYSTEM:CONSOLE /ENTRY:mainCRTStartup /LIBPATH:"%VCDir%\lib" /LIBPATH:"%SDKDir%Lib" %%v.obj vc9_stubs.obj msvcrt.lib msvcprt.lib kernel32.lib user32.lib /NODEFAULTLIB:libcmt.lib
+            if errorlevel 1 exit /b 1
+            %%v.exe
+            if errorlevel 1 exit /b 1
+          )
+          echo --- clang-cl C++14 smoke.cpp PASSED ---
+
+      - name: 'Check sized delete (clang-cl)'
+        shell: bash
+        run: |
+          ./test/check-sized-delete.sh smoke_cpp.obj no
+          ./test/check-sized-delete.sh smoke_cpp14.obj yes
+          ./test/check-sized-delete.sh smoke_cpp14_nosized.obj no
+          for exe in smoke_cpp14.exe smoke_cpp14_nosized.exe; do
+            ./test/check-pe-imports.sh "$exe" +MSVCR90.dll +MSVCP90.dll -MSVCR90D.dll
+          done
+
       # ── C++23 standard probe (clang-cl, x86) ───────────────────────
       # Use -std=c++23 (GCC-style) because clang-cl doesn't recognise
       # /std:c++23 (only c++14/17/20/latest).  Explicit
@@ -1119,14 +1218,24 @@ jobs:
   # ── Linux: clang cross-compile x64 (amd64 libs) ──────────────────
   linux-cross-compile-x64:
     needs: download-isos
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      CLANG_VERSION: 20
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install tools
+      - name: Install tools (clang ${{ env.CLANG_VERSION }} from the Ubuntu archive)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y p7zip-full msitools clang lld llvm
+          sudo apt-get install -y p7zip-full msitools "clang-$CLANG_VERSION" "lld-$CLANG_VERSION" "llvm-$CLANG_VERSION"
+          echo "/usr/lib/llvm-$CLANG_VERSION/bin" >> "$GITHUB_PATH"
+
+      - name: Check the clang version
+        run: |
+          clang --version
+          lld-link --version
+          clang --version | head -1 | grep -q "clang version $CLANG_VERSION\." \
+            || { echo "FAIL: clang on PATH is not clang $CLANG_VERSION"; exit 1; }
 
       - name: Restore cached ISO
         uses: actions/cache@v6
@@ -1339,6 +1448,7 @@ jobs:
       - name: 'Clang cross-compile and lld-link: smoke.cpp'
         run: |
           sudo apt-get install -y -qq clang lld llvm
+          clang --version | head -1
           VC9="${{ steps.vc9.outputs.root }}"
           clang++ --target=i686-pc-windows-msvc -fms-compatibility -fms-extensions -fdelayed-template-parsing \
             -include compat/vc9_compat.h -U_MSC_VER -D_MSC_VER=1500 \
